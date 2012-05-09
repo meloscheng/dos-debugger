@@ -61,6 +61,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="x86_codec.h" />
+    <ClInclude Include="x86_register.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="decode.c" />

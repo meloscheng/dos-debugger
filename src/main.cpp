@@ -3,6 +3,7 @@
 #include <cstring>
 #include <utility>
 #include "cpr/file_mapping.h"
+#include "x86codec/x86_codec.h"
 
 static void hex_dump(const void *_p, size_t size)
 {
@@ -119,6 +120,31 @@ public:
 	}
 };
 
+// Test x86 disassembler.
+static void test_decode()
+{
+    unsigned char code[] = {
+        0x03, 0x05, 0x00, 0x00, 0x00, 0x00 // ADD EAX, dword ptr [0]
+    };
+    
+    x86_insn_t insn;
+    x86_options_t opt;
+    opt.mode = X86_MODE_32BIT;
+    
+    int count = x86_decode(code, &insn, &opt);
+    if (count <= 0)
+    {
+        std::cerr << "Invalid instruction!" << std::endl;
+        return;
+    }
+    if (count != sizeof(code))
+    {
+        std::cerr << "Decode wrong!" << std::endl;
+        return;
+    }
+    std::cout << "Decode OK.\n";
+}
+
 int main(int argc, char* argv[])
 {
 #if 0
@@ -128,6 +154,9 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 #endif
+
+    test_decode();
+    return 0;
 
 	const char *filename = "data/H.EXE";
 

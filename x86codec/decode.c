@@ -3,98 +3,106 @@
  */
 
 #include "x86_codec.h"
+#include <memory.h>
 
 typedef struct x86_opcode_entry
 {
-    int insn;           /* type of instruction */
-    int operands[4];    /* definition of operands */
+    int op;                     /* type of operation */
+    int operands[MAX_OPERANDS]; /* definition of operands */
 } x86_opcode_entry;
+
+enum _extended_opcode_pseudo_insn
+{
+    I__EXT1 = -1,
+    I__EXT1A = -101,
+    I__EXT2 = -2,
+    I__EXT3 = -3,
+    I__EXT4 = -4,
+    I__EXT5 = -5,
+    I__EXT11 = -11
+};
 
 /*
  * An operand is denoted in the form "Zz", with a few additional special 
  * values for specific cases. The first letter specifies the addressing 
  * method, and the rest letters specify the operand type.
- * See Appendix A.2 in Intel Reference, Volume 2.
+ * See Intel Reference, Volume 2, Appendix A.2.
  */
 enum x86_operand_notation
 {
     O_NONE = 0,
 
-    /* Addressing methods */
-    AM_A = 0x0100,  /* address encoded in immediate */
-    AM_C = 0x0300,  /* REG(modrm) specifies control register */
-    AM_E = 0x0500,  /* modrm specifies register or memory */
-    AM_F = 0x0600,  /* EFLAGS or RFLAGS */
-    AM_G = 0x0700,  /* REG(modrm) specifies general register */
-    AM_I = 0x0900,  /* value encoded in immediate */
-    AM_J = 0x0a00,  /* immediate specifies relative offset */
-    AM_M = 0x0d00,  /* modrm specifies memory */
-    AM_O = 0x0f00,  /* ?? */
-    AM_R = 0x1200,  /* RM(modrm) specifies general register */
-    AM_S = 0x1300,  /* REG(modrm) specifies segment register */
-    AM_X = 0x1800,  /* DS:rSI */
-    AM_Y = 0x1900,  /* ES:rDI */
+    /* General operand */
+    O_Ap,
+    O_Eb, O_Ev, O_Ew,
+    O_Fv,
+    O_Gb, O_Gv, O_Gw, O_Gz,
+    O_Ib, O_Iv, O_Iw, O_Iz,
+    O_Jb, O_Jz,
+    O_Ma, O_Mp,
+    O_Ob, O_Ov,
+    O_Sw,
+    O_Xb, O_Xv, O_Xz,
+    O_Yb, O_Yv, O_Yz,
 
-    /* Operand type */
-    OT_b = 0x02,    /* byte */
-    OT_v = 0x16,    /* word (16-bit), dword (32-bit), or qword (64-bit) */
-    OT_w = 0x17,    /* word */
-    OT_z = 0x1a,    /* word (16-bit) or dword (32- and 64-bit) */
+    /* Immediate */
+    O_n = 0x10000,
+    O_1 = O_n + 1,
+    O_3 = O_n + 3,
 
-    /* Combination of addressing method and operand type */
-#define COMBINE(Z,z) O_##Z##z = AM_##Z | OT_##z
-    COMBINE(E,b),
-    COMBINE(E,v),
-    COMBINE(E,w),
-    COMBINE(G,b),
-    COMBINE(G,v),
-    COMBINE(G,w),
-    COMBINE(I,b),
-    COMBINE(I,z),
-    COMBINE(M,a),
-    COMBINE(X,b),
-    COMBINE(X,z),
-    COMBINE(Y,b),
-    COMBINE(Y,z),    
-#undef COMBINE
+    /* Segment registers. */
+    O_XS = 0x20000,
+    O_ES = O_XS + 0,
+    O_CS = O_XS + 1,
+    O_SS = O_XS + 2,
+    O_DS = O_XS + 3,
 
-    /* Specific registers */
-    O_ES = 0x10000,
-    O_CS = 0x10001,
-    O_SS = 0x10002,
-    O_DS = 0x10003,
+    /* Low-byte registers. */
+    O_XL = 0x30000,
+    O_AL = O_XL + 0,
+    O_CL = O_XL + 1,
+    O_DL = O_XL + 2,
+    O_BL = O_XL + 3,
 
-    O_AL = 0x20000,
-    O_CL = 0x20001,
-    O_DL = 0x20002,
-    O_BL = 0x20003,
+    /* High-byte registers. */
+    O_XH = 0x40000,
+    O_AH = O_XH + 0,
+    O_CH = O_XH + 1,
+    O_DH = O_XH + 2,
+    O_BH = O_XH + 3,
 
-    O_rAX = 0x30000, /* AX, EAX, or RAX */
-    O_rCX = 0x30001,
-    O_rDX = 0x30002,
-    O_rBX = 0x30003,
-    O_rSP = 0x30004,
-    O_rBP = 0x30005,
-    O_rSI = 0x30006,
-    O_rDI = 0x30007,
+    /* 16-bit generic registers */
+    O_XX = 0x50000,
+    O_AX = O_XX + 0,
+    O_CX = O_XX + 1,
+    O_DX = O_XX + 2,
+    O_BX = O_XX + 3,
+    O_SP = O_XX + 4,
+    O_BP = O_XX + 5,
+    O_SI = O_XX + 6,
+    O_DI = O_XX + 7,
 
-    O_eAX = 0x40000, /* AX or EAX */
-    O_eCX = 0x40001,
-    O_eDX = 0x40002,
-    O_eBX = 0x40003,
-    O_eSP = 0x40004,
-    O_eBP = 0x40005,
-    O_eSI = 0x40006,
-    O_eDI = 0x40007,
+    /* XX in 16-bit mode, EXX in 32- or 64-bit mode */
+    O_eXX = 0x60000,
+    O_eAX = O_eXX + 0,
+    O_eCX = O_eXX + 1,
+    O_eDX = O_eXX + 2,
+    O_eBX = O_eXX + 3,
+    O_eSP = O_eXX + 4,
+    O_eBP = O_eXX + 5,
+    O_eSI = O_eXX + 6,
+    O_eDI = O_eXX + 7,
 
-    O_AX = 0x50000, /* AX */
-    O_CX = 0x50001,
-    O_DX = 0x50002,
-    O_BX = 0x50003,
-    O_SP = 0x50004,
-    O_BP = 0x50005,
-    O_SI = 0x50006,
-    O_DI = 0x50007,
+    /* XX in 16-bit mode, EXX in 32-bit mode, RXX in 64-bit mode */
+    O_rXX = 0x70000,
+    O_rAX = O_rXX + 0,
+    O_rCX = O_rXX + 1,
+    O_rDX = O_rXX + 2,
+    O_rBX = O_rXX + 3,
+    O_rSP = O_rXX + 4,
+    O_rBP = O_rXX + 5,
+    O_rSI = O_rXX + 6,
+    O_rDI = O_rXX + 7,
 
     O_XXXX
 };
@@ -252,10 +260,488 @@ static x86_opcode_entry x86_opcode_map_1byte[256] =
     /* 7E */ OP0(JLE),
     /* 7F */ OP0(JNLE),
 
+    /* 80 */ OP2(_EXT1, Eb, Ib),
+    /* 81 */ OP2(_EXT1, Ev, Iz),
+    /* 82 */ OP2(_EXT1, Eb, Ib), /* i64 ??? TBD */
+    /* 83 */ OP2(_EXT1, Ev, Ib),
+    /* 84 */ OP2(TEST, Eb, Gb),
+    /* 85 */ OP2(TEST, Ev, Gv),
+    /* 86 */ OP2(XCHG, Eb, Gb),
+    /* 87 */ OP2(XCHG, Ev, Gv),
+    /* 88 */ OP2(MOV, Eb, Gb),
+    /* 89 */ OP2(MOV, Ev, Gv),
+    /* 8A */ OP2(MOV, Gb, Eb),
+    /* 8B */ OP2(MOV, Gv, Ev),
+    /* 8C */ OP2(MOV, Ev, Sw),
+    /* 8D */ OP2(LEA, Gv, Mp), /* ??? missing TBD */
+    /* 8E */ OP2(MOV, Sw, Ew),
+    /* 8F */ OP0(_EXT1A), /* POP(d74) Ev */
 
+    /* 90 */ OP0(NOP), /* PAUSE (F3), XCHG r8, rAX */
+    /* 91 */ OP2(XCHG, rCX, rAX),
+    /* 92 */ OP2(XCHG, rDX, rAX),
+    /* 93 */ OP2(XCHG, rBX, rAX),
+    /* 94 */ OP2(XCHG, rSP, rAX),
+    /* 95 */ OP2(XCHG, rBP, rAX),
+    /* 96 */ OP2(XCHG, rSI, rAX),
+    /* 97 */ OP2(XCHG, rDI, rAX),
+    /* 98 */ OP0(CBW), /* CWDE/CDQE */
+    /* 99 */ OP0(CWD), /* CDQ/CQO */
+    /* 9A */ OP1(CALLF, Ap), /* i64 */
+    /* 9B */ OP0(FWAIT), /* WAIT */
+    /* 9C */ OP1(PUSHF, Fv), /* PUSHF/D/Q(d64) */
+    /* 9D */ OP1(POPF, Fv), /* POPF/D/Q(d64) */
+    /* 9E */ OP0(SAHF),
+    /* 9F */ OP0(LAHF),
+
+    /* A0 */ OP2(MOV, AL, Ob),
+    /* A1 */ OP2(MOV, rAX, Ov),
+    /* A2 */ OP2(MOV, Ob, AL),
+    /* A3 */ OP2(MOV, Ov, rAX),
+    /* A4 */ OP2(MOVS, Yb, Xb), /* MOVS/B */
+    /* A5 */ OP2(MOVS, Yv, Xv), /* MOVS/W/D/Q */
+    /* A6 */ OP2(CMPS, Xb, Yb), /* CMPS/B */
+    /* A7 */ OP2(CMPS, Xv, Yv), /* CMPS/W/D */
+    /* A8 */ OP2(TEST, AL, Ib),
+    /* A9 */ OP2(TEST, rAX, Iz),
+    /* AA */ OP2(STOS, Yb, AL), /* STOS/B */
+    /* AB */ OP2(STOS, Yv, rAX), /* STOS/W/D/Q */
+    /* AC */ OP2(LODS, AL, Xb), /* LODS/B */
+    /* AD */ OP2(LODS, rAX, Xv), /* LODS/W/D/Q */
+    /* AE */ OP2(SCAS, AL, Yb), /* SCAS/B */ /* TBD */
+    /* AF */ OP2(SCAS, rAX, Xv), /* SCAS/W/D/Q */ /* TBD */
+
+    /* B0 */ OP2(MOV, AL, Ib),
+    /* B1 */ OP2(MOV, CL, Ib),
+    /* B2 */ OP2(MOV, DL, Ib),
+    /* B3 */ OP2(MOV, BL, Ib),
+    /* B4 */ OP2(MOV, AH, Ib),
+    /* B5 */ OP2(MOV, CH, Ib),
+    /* B6 */ OP2(MOV, DH, Ib),
+    /* B7 */ OP2(MOV, BH, Ib),
+    /* B8 */ OP2(MOV, rAX, Iv),
+    /* B9 */ OP2(MOV, rCX, Iv),
+    /* BA */ OP2(MOV, rDX, Iv),
+    /* BB */ OP2(MOV, rBX, Iv),
+    /* BC */ OP2(MOV, rSP, Iv),
+    /* BD */ OP2(MOV, rBP, Iv),
+    /* BE */ OP2(MOV, rSI, Iv),
+    /* BF */ OP2(MOV, rDI, Iv),
+
+    /* C0 */ OP2(_EXT2, Eb, Ib),
+    /* C1 */ OP2(_EXT2, Ev, Ib),
+    /* C2 */ OP1(RETN, Iw), /* f64 */
+    /* C3 */ OP0(RETN),     /* f64 */
+    /* C4 */ OP2(LES, Gz, Mp), /* i64; VEX+2byte */
+    /* C5 */ OP2(LDS, Gz, Mp), /* i64; VEX+1byte */
+    /* C6 */ OP2(_EXT11, Eb, Ib),
+    /* C7 */ OP2(_EXT11, Ev, Iz),
+    /* C8 */ OP2(ENTER, Iw, Ib),
+    /* C9 */ OP0(LEAVE), /* d64 */
+    /* CA */ OP1(RETF, Iw),
+    /* CB */ OP0(RETF),
+    /* CC */ OP1(INT, 3),
+    /* CD */ OP1(INT, Ib),
+    /* CE */ OP0(INTO), /* i64 */
+    /* CF */ OP0(IRET), /* IRET/D/Q */
+
+    /* D0 */ OP2(_EXT2, Eb, 1),
+    /* D1 */ OP2(_EXT2, Ev, 1),
+    /* D2 */ OP2(_EXT2, Eb, CL),
+    /* D3 */ OP2(_EXT2, Ev, CL),
+    /* D4 */ OP1(AAM, Ib), /* i64 */
+    /* D5 */ OP1(AAD, Ib), /* i64 */
+    /* D6 */ OP_EMPTY,
+    /* D7 */ OP0(XLAT), /* XLATB */
+    /* D8-D15 */ OP_EMPTY_8, /* escape to x87 fpu */
+
+    /* E0 */ OP1(LOOPNE, Jb), /* f64 */
+    /* E1 */ OP1(LOOPE, Jb), /* f64 */
+    /* E2 */ OP1(LOOP, Jb), /* f64 */
+    /* E3 */ OP1(JCXZ, Jb), /* f64; JrCXZ */
+    /* E4 */ OP2(IN, AL, Ib),
+    /* E5 */ OP2(IN, eAX, Ib),
+    /* E6 */ OP2(OUT, Ib, AL),
+    /* E7 */ OP2(OUT, Ib, eAX),
+    /* E8 */ OP1(CALL, Jz), /* f64 */
+    /* E9 */ OP1(JMP, Jz), /* near, f64 */
+    /* EA */ OP1(JMP, Ap), /* far, i64 */
+    /* EB */ OP1(JMP, Jb), /* short, f64 */
+    /* EC */ OP2(IN, AL, DX),
+    /* ED */ OP2(IN, eAX, DX),
+    /* EE */ OP2(OUT, DX, AL),
+    /* EF */ OP2(OUT, DX, eAX),
+
+    /* F0 */ OP_EMPTY, /* LOCK (prefix) */
+    /* F1 */ OP_EMPTY,
+    /* F2 */ OP_EMPTY, /* REPNE (prefix) */
+    /* F3 */ OP_EMPTY, /* REPE (prefix) */
+    /* F4 */ OP0(HLT),
+    /* F5 */ OP0(CMC),
+    /* F6 */ OP1(_EXT3, Eb),
+    /* F7 */ OP1(_EXT3, Ev),
+    /* F8 */ OP0(CLC),
+    /* F9 */ OP0(STC),
+    /* FA */ OP0(CLI),
+    /* FB */ OP0(STI),
+    /* FC */ OP0(CLD),
+    /* FD */ OP0(STD),
+    /* FE */ OP0(_EXT4), /* INC/DEC */
+    /* FF */ OP0(_EXT5)  /* INC/DEC */
 };
 
-int x86_decode(const void *code, asm_insn_t *insn, const x86_options_t *opt)
+/* 
+ * _EXT1 : immediate grp 1
+ * _EXT2 : shift grp 2
+ * _EXT3 : unary grp 3
+ * _EXT11 : grp 11 - MOV
+ */
+
+
+
+/**
+ * Decodes instruction prefixes, and stores them in the instruction.
+ * If one or more prefixes are found, returns the number of bytes consumed.
+ * If no prefix is found, returns 0. 
+ * If the instruction is invalid, returns -1.
+ */
+static int decode_prefix(const unsigned char *code, x86_insn_t *insn, const x86_options_t *opt)
 {
-	return -1;
+    /* Prefix table, where prefix_grp[c] = the prefix group of byte c.
+     * The group number can be from 1 to 5, whose meaning is as follows:
+     *
+     *   Group 1-4 : legacy group 1-4.
+     *   Group 5: REX prefix (only available in 64-bit mode).
+     *
+     * At most one prefix from each group may be present in an instruction.
+     * If a prefix is already present, it is an invalid instruction. If an
+     * REX prefix is encountered, no more prefixes are read because an REX 
+     * prefix is required to immediately preceed the opcode.
+     */
+    static const unsigned char prefix_grp[256] = 
+    {
+        /* 0 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 1 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 2 */  0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+        /* 3 */  0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0,
+        /* 4 */  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 
+        /* 5 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 6 */  0, 0, 0, 0, 2, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 7 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 8 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 9 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* A */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* B */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* C */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* D */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* E */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* F */  1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+
+    const unsigned char *p = code;
+    for ( ; ; p++)
+    {
+        unsigned char c = *p;
+
+        /* Find out which prefix group the byte belongs to. */
+        unsigned char grp = prefix_grp[c];
+
+        /* Finish if this byte is not a prefix. */
+        if (grp == 0)
+            break;
+
+        /* Finish if this byte is REX prefix, but we're not in 64-bit mode. */
+        if (grp == 5 && CPU_SIZE(opt) != OPR_64BIT)
+            break;
+
+        /* Make sure only one prefix from each group is present. */
+        if (insn->prefix[grp - 1] != 0)
+            return -1;
+
+        /* Set the prefix in the instruction. */
+        insn->prefix[grp - 1] = c;
+
+        /* If this byte is REX prefix, we needn't check prefixes no more. */
+        if (grp == 5)
+        {
+            p++;
+            break;
+        }
+    }
+
+    /* Return the number of bytes consumed. */
+    return (p - code);
+}
+
+/* Access the ModR/M byte */
+#define MOD(b) (((b) >> 6) & 0x3)
+#define REG(b) ((b) & 0x7)
+#define RM(b)  (((b) >> 3) & 0x3)
+
+#define FILL_REG(_opr, _reg) \
+    do { \
+        x86_reg_t r = (_reg); \
+        (_opr)->size = REG_SIZE(r); \
+        (_opr)->type = OPR_REG; \
+        (_opr)->val.reg = r; \
+    } while (0)
+
+#define FILL_MEM(_opr, _size, _segment, _base, _index, _scaling, _disp) \
+    do { \
+        (_opr)->size = (_size); \
+        (_opr)->type = OPR_MEM; \
+        (_opr)->val.mem.segment = (_segment); \
+        (_opr)->val.mem.base = (_base); \
+        (_opr)->val.mem.index = (_index); \
+        (_opr)->val.mem.scaling = (_scaling); \
+        (_opr)->val.mem.displacement = (_disp); \
+    } while (0)
+
+/* Converts byte register 0-7 from machine encoding to logical identifier. */
+#define REG_CONVERT_BYTE(number) REG_MAKE(R_TYPE_GENERAL, (number) & 3, OPR_8BIT, (number) >> 2)
+
+struct x86_raw_insn_t
+{
+    uint32_t opcode;
+    uint8_t  modrm;
+    uint8_t  sib;
+    uint32_t disp;
+    uint32_t imm;
+};
+
+#define EAT_BYTE(pend) (pend += 1, pend[-1])
+#define EAT_WORD(pend) (pend += 2, (uint16_t)pend[-2] | ((uint16_t)pend[-1] << 8))
+#define EAT_DWORD(pend) (pend += 4, \
+    (uint32_t)pend[-4] | ((uint32_t)pend[-3] << 8) | \
+    ((uint32_t)pend[-2] << 16) | ((uint32_t)pend[-2] << 24))
+#define EAT_MODRM(pend, code) (pend = (pend == code? pend + 1 : pend), pend[-1])
+
+/* Decodes a memory (or optionally register) operand. A ModR/M byte follows
+ * the opcode and specifies the operand. If reg_type is not zero, the operand
+ * is allowed to be a register of the specified type. If the operand is a 
+ * memory address, the address is computed from a segment register and any of
+ * the following values: a base register, an index register, a scaling factor, 
+ * and a displacement.
+ *
+ * The function returns the new end of used bytes if successful. If the 
+ * instruction is invalid, returns NULL.
+ */
+static const unsigned char * 
+decode_memory_operand(
+    x86_opr_t *opr,             /* decoded operand */
+    const unsigned char *begin, /* begin of modrm byte */
+    const unsigned char *end,   /* one past the last-used byte */
+    int opr_size,               /* size of the register or operand */
+    int reg_type,               /* if non-zero, type of the register */
+    int cpu_size)               /* word-size of the cpu */
+{
+    unsigned char modrm = *begin;
+    if (end == begin)
+        ++end;
+
+    if (cpu_size == OPR_16BIT)
+    {
+        /* Decode a register if MOD = (11). */
+        if (MOD(modrm) == 3)
+        {
+            if (reg_type == 0) /* register not allowed */
+                return 0;
+
+            /* Interpret it as a register. Treat AH-DH specially. */
+            if (reg_type == R_TYPE_GENERAL && opr_size == OPR_8BIT)
+                FILL_REG(opr, REG_CONVERT_BYTE(RM(modrm)));
+            else
+                FILL_REG(opr, REG_MAKE(reg_type, RM(modrm), opr_size, 0));
+            return end;
+        }
+
+        /* Decode a direct memory address if MOD = (00) and RM = (110). */
+        if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16 */
+        {
+            uint32_t disp = EAT_WORD(end);
+            FILL_MEM(opr, opr_size, R_DS, 0, 0, 0, disp);
+            return end;
+        }
+
+        /* Decode an indirect memory address XX[+YY][+disp]. */
+        switch (RM(modrm))
+        {
+        case 0: /* [BX+SI] */
+            FILL_MEM(opr, opr_size, R_DS, R_BX, R_SI, 1, 0);
+            break;
+        case 1: /* [BX+DI] */
+            FILL_MEM(opr, opr_size, R_DS, R_BX, R_DI, 1, 0);
+            break;
+        case 2: /* [BP+SI] */
+            FILL_MEM(opr, opr_size, R_SS, R_BP, R_SI, 1, 0);
+            break;
+        case 3: /* [BP+DI] */
+            FILL_MEM(opr, opr_size, R_DS, R_BP, R_SI, 1, 0);
+            break;
+        case 4: /* [SI] */
+            FILL_MEM(opr, opr_size, R_DS, R_SI, 0, 1, 0);
+            break;
+        case 5: /* [DI] */
+            FILL_MEM(opr, opr_size, R_DS, R_DI, 0, 1, 0);
+            break;
+        case 6: /* [BP] */
+            FILL_MEM(opr, opr_size, R_SS, R_BP, 0, 1, 0);
+            break;
+        case 7: /* [BX] */
+            FILL_MEM(opr, opr_size, R_DS, R_BX, 0, 1, 0);
+            break;
+        }
+        if (MOD(modrm) == 1) /* disp8 */
+            opr->val.mem.displacement = EAT_BYTE(end);
+        else if (MOD(modrm) == 2) /* disp16 */
+            opr->val.mem.displacement = EAT_WORD(end);
+        return end;
+    }
+    else if (cpu_size == OPR_32BIT)
+    {
+
+    }
+    return 0; /* should not reach here */
+}
+
+static const unsigned char *
+decode_operand(
+    x86_opr_t *opr,             /* decoded operand */
+    const unsigned char *begin, /* begin of modrm byte */
+    const unsigned char *end,   /* one past the last-used byte */
+    int def,                    /* operand encoding specification */
+    const x86_options_t *opt)   /* options */
+{
+    int reg = R_NONE;
+    unsigned char modrm;
+    /* uint32_t imm; */
+    int cpu_size = CPU_SIZE(opt);
+    /* int opr_size; */
+
+    switch (def)
+    {
+    case O_Gb:
+        /* REG(modrm) selects byte-size GPR. */
+        /* TBD: check AH-DH */
+        modrm = EAT_MODRM(end, begin);
+        reg = REG_CONVERT_BYTE(REG(modrm));
+        break;
+
+    case O_Gv:
+        /* REG(modrm) selects GPR of native size (16, 32, or 64 bit) */
+        modrm = EAT_MODRM(end, begin);
+        reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), CPU_SIZE(opt), 0);
+        break;
+
+    case O_Gw:
+        /* REG(modrm) selects word-size GPR. */
+        modrm = EAT_MODRM(end, begin);
+        reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), OPR_16BIT, 0);
+        break;
+
+    case O_Gz:
+        /* REG(modrm) selects word-size GPR for 16-bit, dword-size GPR for
+         * 32 or 64 bit. 
+         */
+        modrm = EAT_MODRM(end, begin);
+        reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), 
+                CPU_SIZE(opt) == OPR_16BIT ? OPR_16BIT : OPR_32BIT, 0);
+        break;
+
+    case O_Eb:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is byte.
+         */
+        end = decode_memory_operand(opr, begin, end, OPR_8BIT, R_TYPE_GENERAL, cpu_size);
+        break;
+
+    case O_Ev:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is the native word size of the CPU.
+         */
+        end = decode_memory_operand(opr, begin, end, cpu_size, R_TYPE_GENERAL, cpu_size);
+        break;
+
+    case O_Ew:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is word.
+         */
+        end = decode_memory_operand(opr, begin, end, OPR_16BIT, R_TYPE_GENERAL, cpu_size);
+        break;
+
+    default:
+        break;
+    }
+
+
+    switch (def & 0xff0000)
+    {
+    case 0: /* general operand Zz */
+        break;
+    case O_n: /* immediate */
+        break;
+    case O_XS: /* segment register */
+        reg = REG_MAKE(R_TYPE_SEGMENT, def & 0xf, OPR_16BIT, 0);
+        break;
+    case O_XL: /* low byte register */
+        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_8BIT, 0);
+        break;
+    case O_XH: /* high byte register */
+        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_8BIT, R_OFFSET_HIBYTE);
+        break;
+    case O_XX: /* 16-bit GPR */
+        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_16BIT, 0);
+        break;
+    case O_eXX: /* 16-bit or 32-bit */
+        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, 
+            (cpu_size == OPR_16BIT)? OPR_16BIT : OPR_32BIT, 0);
+        break;
+    case O_rXX: /* 16-bit, 32-bit, or 64-bit */
+        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, cpu_size, 0);
+        break;
+    }
+    return end;
+}
+
+int x86_decode(const unsigned char *code, x86_insn_t *insn, const x86_options_t *opt)
+{
+    const unsigned char *p = code;
+    const unsigned char *end;
+    unsigned char c;
+    int count, i;
+    const struct x86_opcode_entry *ent;
+
+    /* Clear instruction. */
+    memset(insn, 0, sizeof(struct x86_insn_t));
+
+    /* Decode prefixes. */
+    count = decode_prefix(p, insn, opt);
+    if (count < 0)
+        return -1;
+    p += count;
+
+    /* Process the first byte of the opcode. */
+    c = *p++;
+    ent = &x86_opcode_map_1byte[c];
+    if (ent->op == 0) /* undefined opcode */
+        return -1;
+    insn->op = ent->op;
+
+    /* Parse arguments. */
+    end = p;
+    for (i = 0; i < MAX_OPERANDS; i++)
+    {
+        int def = ent->operands[i];
+        if (def == 0) /* no more operands */
+            break;
+        end = decode_operand(&insn->oprs[i], p, end, def, opt);
+        if (end == 0) /* decoding failed */
+            return -1;
+    }
+
+    /* Returns the number of bytes consumed. */
+    return end - code;
 }

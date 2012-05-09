@@ -14,6 +14,9 @@
     <ClInclude Include="x86_codec.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="x86_register.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="decode.c">
