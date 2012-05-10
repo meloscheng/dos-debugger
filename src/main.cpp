@@ -188,7 +188,13 @@ int main(int argc, char* argv[])
 	// std::cout << "Image size: " << reader.image_size() << std::endl;
 
     // Decode from a specific address.
-    size_t start = 0x7430;
+#if 0
+    size_t start = 0x7430; // This is program entry
+#elif 1
+    size_t start = 0x3770; // near a jump table
+#else
+    size_t start = 0x17fc; // This is proc OutputDecodedPage
+#endif
     size_t total = reader.image_size();
     x86_options_t opt;
     opt.mode = OPR_16BIT;
@@ -201,12 +207,35 @@ int main(int argc, char* argv[])
         if (count <= 0)
         {
             std::cout << "Invalid instruction." << std::endl;
+#if 0
+            __debugbreak();
+            continue;
+#else
             break;
+#endif
         }
+
+        /* Output address. */
+        printf("0000:%04X  ", (unsigned int)(p - code));
+
+        /* Output binary code. */
+        for (int i = 0; i < 8; i++)
+        {
+            if (i < count)
+                printf("%02x ", p[i]);
+            else
+            {
+                std::cout << "   ";
+            }
+        }
+
         char text[256];
         x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
         std::cout << text << std::endl;
-        p += count;
+        if (text[0] == '*')
+            __debugbreak();
+        else
+            p += count;
     }
 
 	// Produce a hex-dump of the first few bytes of the image.

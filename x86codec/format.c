@@ -184,16 +184,16 @@ format_imm(uint32_t imm, char *p, x86_fmt_t fmt)
         return p;
     }
 
-    /* Prepend with 0 if the first character is alpha. */
-    if (imm & 0x88888888UL)
-        *p++ = '0';
-
     /* Find the first non-zero nibble. */
     for (i = 28; i >= 0; i -= 4)
     {
         if (imm >> i)
             break;
     }
+
+    /* Prepend with 0 if the first nibble is alpha. */
+    if ((imm >> i) & 8)
+        *p++ = '0';
 
     /* Format each hexidecimal nibble. */
     for (; i >= 0; i -= 4)
@@ -291,7 +291,10 @@ void x86_format(const x86_insn_t *insn, char buffer[256], x86_fmt_t fmt)
 
     /* Format mnemonic. */
     if (!(insn->op >= 0 && insn->op < N))
+    {
+        strcpy(buffer, "**** INVALID INSTRUCTION ****");
         return;
+    }
 
     /* Turn to lower case if necessary. */
     p = copy_string_and_change_case(insn_str[insn->op], buffer, fmt);

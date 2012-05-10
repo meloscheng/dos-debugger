@@ -201,7 +201,7 @@ enum x86_opr_spec
     | ((uint64_t)(opr3)<<32) | ((uint64_t)(opr4)<<40) )
 
 /* Get the operation in an encoding specification. */
-#define SPEC_INSN(spec) ((uint16_t)((spec) & 0xffff))
+#define SPEC_INSN(spec) ((int16_t)((spec) & 0xffff))
 
 /* Get the given operand (zero-based) in an encoding specification. */
 #define SPEC_OPERAND(spec,i) ((uint8_t)(((spec)>>(16+(i)*8))&0xff))
@@ -590,9 +590,12 @@ process_opcode_extension(
     uint32_t opcode, 
     unsigned char modrm)
 {
-    uint16_t op = SPEC_INSN(spec);
+    int16_t op = SPEC_INSN(spec);
     int reg = REG(modrm);
     int mod = MOD(modrm);
+
+    /* Remove the opcode part of 'spec' so that it can be merged. */
+    spec = SPEC_OPERANDS(spec);
 
     if (op == I__EXT1)
     {
@@ -604,7 +607,7 @@ process_opcode_extension(
         return SPEC_MERGE(map[reg], spec);
     }
 
-    if (op == I__EXT2)
+    if (op == I__EXT1A)
     {
         static const x86_insn_spec_t map[8] = { OP0(POP) };
         return SPEC_MERGE(map[reg], spec);
@@ -683,6 +686,25 @@ process_opcode_extension(
             OP_EMPTY
         };
         return map[reg];
+    }
+
+    if (op == I__EXT11)
+    {
+        if (reg == 0)
+        {
+            if (opcode == 0xC6)
+                return OP2(MOV, Eb, Ib);
+            else if (opcode == 0xC7)
+                return OP2(MOV, Ev, Iz);
+        }
+        else if (modrm == 0xF8)
+        {
+            if (opcode == 0xC6)
+                return OP1(XABORT, Ib);
+            else if (opcode == 0xC7)
+                return OP1(XBEGIN, Jz);
+        }
+        return 0;
     }
 
     /* Invalid opcode extension. */
@@ -875,11 +897,15 @@ static int decode_operand(
             reg = REG_MAKE(R_TYPE_SEGMENT, number, OPR_16BIT, 0);
             break;
         case O_XL: /* low byte register */
-            reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_8BIT, 0);
+            if (number < 4)
+                reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_8BIT, 0);
+            else
+                reg = REG_MAKE(R_TYPE_GENERAL, number - 4, OPR_8BIT, R_OFFSET_HIBYTE);
             break;
-        case O_XH: /* high byte register */
-            reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_8BIT, R_OFFSET_HIBYTE);
+#if 0
+        case O_XH: /* high byte register */    
             break;
+#endif
         case O_XX: /* 16-bit GPR */
             reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_16BIT, 0);
             break;
@@ -983,6 +1009,47 @@ static int decode_operand(
         FILL_REL(opr, OPR_8BIT, read_byte(rd));
         break;
 
+    case O_Jz: /* immediate encodes relative offset (word or dword) */
+        if (cpu_size == OPR_16BIT)
+            FILL_REL(opr, OPR_16BIT, read_word(rd));
+        else
+            FILL_REL(opr, OPR_32BIT, read_dword(rd));
+        break;
+
+    case O_Sw: /* REG(modrm) selects segment register */
+        modrm = read_modrm(rd);
+        reg = REG_MAKE(R_TYPE_SEGMENT, REG(modrm), OPR_16BIT, 0);
+        FILL_REG(opr, reg);
+        break;
+
+    case O_Ob: /* no ModR/M byte; absolute memory address in disp as
+                * 16-bit or 32-bit near ptr
+                */
+        if (cpu_size == OPR_16BIT)
+            FILL_MEM(opr, OPR_8BIT, R_DS, R_NONE, R_NONE, 1, read_word(rd));
+        else
+            FILL_MEM(opr, OPR_8BIT, R_DS, R_NONE, R_NONE, 1, read_dword(rd));
+        break;
+
+    case O_Ov: /* no ModR/M byte; absolute memory address (native word)
+                * encoded in displacement of either word or dword.
+                */
+        /* TBD: operand size prefix */
+        if (cpu_size == OPR_16BIT)
+            FILL_MEM(opr, cpu_size, R_DS, R_NONE, R_NONE, 1, read_word(rd));
+        else
+            FILL_MEM(opr, cpu_size, R_DS, R_NONE, R_NONE, 1, read_dword(rd));
+        break;
+
+    case O_Mp: /* The ModR/M byte must refer to memory of seg:ptr */
+        return decode_memory_operand(opr, rd, cpu_size, 0, cpu_size);
+
+    case O_Ap: /* No ModR/M byte; address encoded in imm in the form of
+                * seg:ptr */
+        FILL_IMM(opr, cpu_size, read_imm(rd, cpu_size));    /* ptr */
+        FILL_IMM(opr, OPR_16BIT, read_word(rd));            /* seg */
+        break;
+
     default:
         return 0; /* invalid specification */
     }
@@ -1011,6 +1078,9 @@ int x86_decode(
     if (count < 0)
         return -1;
     p += count;
+    rd.opcode += count;
+    rd.modrm += count;
+    rd.end += count;
 
     /* Decode the opcode and get encoding specification. */
     spec = decode_opcode(&rd, CPU_SIZE(opt));
