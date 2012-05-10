@@ -28,13 +28,17 @@ typedef struct x86_mem_t
 /* Represents an immediate. */
 typedef uint32_t x86_imm_t;
 
+/* Represents a relative offset to EIP. */
+typedef int32_t x86_rel_t;
+
 /* Enumerated values for the type of an operand. */
 enum x86_opr_type
 {
     OPR_NONE    = 0,    /* the operand is not used */
     OPR_REG     = 1,    /* the operand refers to a register */
     OPR_MEM     = 2,    /* the operand refers to a memory location */
-    OPR_IMM     = 3     /* the operand is an immediate */
+    OPR_IMM     = 3,    /* the operand is an immediate */
+    OPR_REL     = 4     /* the operand is an (signed) offset to EIP */
 };
 
 /* Enumerated values for the size of an operand. */
@@ -62,6 +66,7 @@ typedef struct x86_opr_t
         x86_reg_t reg;
         x86_mem_t mem;
         x86_imm_t imm;
+        x86_rel_t rel;
     } val;              /* value */
 } x86_opr_t;
 
@@ -506,8 +511,9 @@ typedef struct x86_insn_t
 
 /* Decodes an instruction. Returns the number of bytes consumed. */
 int x86_decode(
-    const unsigned char *code, 
-    struct x86_insn_t *insn, 
+    const unsigned char *code_begin,
+    const unsigned char *code_end,
+    x86_insn_t *insn, 
     const x86_options_t *opt);
 
 #define X86_FMT_SYNTAX(f) ((f) & 1)

@@ -3,6 +3,7 @@
 #include "x86_codec.h"
 
 #include <string.h>
+#include <stdio.h>
 
 static const char *insn_str[] = 
 {
@@ -174,9 +175,45 @@ copy_string_and_change_case(const char *src, char *dest, x86_fmt_t fmt)
 static char *
 format_imm(uint32_t imm, char *p, x86_fmt_t fmt)
 {
+    int i;
+
+    /* Encode in decimal if it's a single digit. */
+    if (imm < 10)
+    {
+        *p++ = '0' + imm;
+        return p;
+    }
+
+    /* Prepend with 0 if the first character is alpha. */
     if (imm & 0x88888888UL)
         *p++ = '0';
+
+    /* Find the first non-zero nibble. */
+    for (i = 28; i >= 0; i -= 4)
+    {
+        if (imm >> i)
+            break;
+    }
+
+    /* Format each hexidecimal nibble. */
+    for (; i >= 0; i -= 4)
+    {
+        int d = (imm >> i) & 0xf;
+        *p++ = (d < 10)? ('0' + d) : ('a' + d - 10);
+    }
+
+    /* Append hexidecimal mark. */
     *p++ = 'h';
+    return p;
+}
+
+static char *
+format_rel(int32_t rel, char *p, x86_fmt_t fmt)
+{
+    if (rel >= 0)
+        *p++ = '+';
+    sprintf(p, "%d", rel);
+    p += strlen(p);
     return p;
 }
 
@@ -231,12 +268,14 @@ format_operand(const x86_opr_t *opr, char *p, x86_fmt_t fmt)
 {
     switch (opr->type)
     {
-    case OPR_IMM:
-        return format_imm(opr->val.imm, p, fmt);
     case OPR_REG:
         return format_reg(opr->val.reg, p, fmt);
     case OPR_MEM:
         return format_mem(opr, p, fmt);
+    case OPR_IMM:
+        return format_imm(opr->val.imm, p, fmt);
+    case OPR_REL:
+        return format_rel(opr->val.rel, p, fmt);
     default:
         return p;
     }

@@ -131,7 +131,7 @@ static void test_decode()
     x86_options_t opt;
     opt.mode = OPR_16BIT;
     
-    int count = x86_decode(code, &insn, &opt);
+    int count = x86_decode(code, &code[6], &insn, &opt);
     if (count <= 0)
     {
         std::cerr << "Invalid instruction!" << std::endl;
@@ -162,8 +162,10 @@ int main(int argc, char* argv[])
 	}
 #endif
 
+#if 0
     test_decode();
     return 0;
+#endif
 
 	const char *filename = "data/H.EXE";
 
@@ -183,10 +185,32 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	std::cout << "Image size: " << reader.image_size() << std::endl;
+	// std::cout << "Image size: " << reader.image_size() << std::endl;
+
+    // Decode from a specific address.
+    size_t start = 0x7430;
+    size_t total = reader.image_size();
+    x86_options_t opt;
+    opt.mode = OPR_16BIT;
+    const unsigned char *code = (const unsigned char *)reader.image_address();
+    const unsigned char *p = code + start;
+    for ( ; p < code + total; )
+    {
+        x86_insn_t insn;
+        int count = x86_decode(p, code + total, &insn, &opt);
+        if (count <= 0)
+        {
+            std::cout << "Invalid instruction." << std::endl;
+            break;
+        }
+        char text[256];
+        x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
+        std::cout << text << std::endl;
+        p += count;
+    }
 
 	// Produce a hex-dump of the first few bytes of the image.
-	hex_dump(reader.image_address(), std::min(reader.image_size(), (size_t)256));
+	// hex_dump(reader.image_address(), std::min(reader.image_size(), (size_t)256));
 
 	// Release resources.
 	mmap_close(mm);

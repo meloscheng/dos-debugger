@@ -5,22 +5,103 @@
 #include "x86_codec.h"
 #include <memory.h>
 
-typedef struct x86_opcode_entry
+/* Specialized instruction reader. */
+typedef struct x86_insn_reader_t
 {
-    int op;                     /* type of operation */
-    int operands[MAX_OPERANDS]; /* definition of operands */
-} x86_opcode_entry;
+    unsigned char buffer[20];       /* buffer used when few bytes left */
+    const unsigned char *prefix;    /* pointer to beginning of instruction */
+    const unsigned char *opcode;    /* pointer to opcode */
+    const unsigned char *modrm;     /* pointer to modrm byte */
+    const unsigned char *end;       /* pointer to end of insn + 1 */
+} x86_insn_reader_t;
 
-enum _extended_opcode_pseudo_insn
+/* Initializes a bytecode reader to read code from a given part of memory. */
+static void 
+init_reader(x86_insn_reader_t *rd, const unsigned char *begin, const unsigned char *end)
 {
-    I__EXT1 = -1,
-    I__EXT1A = -101,
-    I__EXT2 = -2,
-    I__EXT3 = -3,
-    I__EXT4 = -4,
-    I__EXT5 = -5,
-    I__EXT11 = -11
-};
+    if (end - begin < sizeof(rd->buffer))
+    {
+        memset(rd->buffer, 0xcc, sizeof(rd->buffer)); /* debug token */
+        memcpy(rd->buffer, begin, end - begin);
+        rd->prefix = rd->buffer;
+    }
+    else
+    {
+        rd->prefix = begin;
+    }
+    rd->opcode = rd->modrm = rd->end = rd->prefix;
+}
+
+static uint8_t read_byte(x86_insn_reader_t *rd)
+{
+    const unsigned char *p = rd->end;
+    rd->end++;
+    return *p;
+}
+
+static uint16_t read_word(x86_insn_reader_t *rd)
+{
+    const unsigned char *p = rd->end;
+    rd->end += 2;
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t read_dword(x86_insn_reader_t *rd)
+{
+    const unsigned char *p = rd->end;
+    rd->end += 4;
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) 
+        | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint32_t read_imm(x86_insn_reader_t *rd, int size)
+{
+    return (size == OPR_8BIT)? read_byte(rd) :
+        (size == OPR_16BIT)? read_word(rd) :
+        (size == OPR_32BIT)? read_dword(rd) : 0;
+}
+
+static unsigned char read_modrm(x86_insn_reader_t *rd)
+{
+    if (rd->end == rd->modrm)
+        rd->end++;
+    return *rd->modrm;
+}
+
+/* Marks the next byte as ModR/M. */
+static void mark_modrm(x86_insn_reader_t *rd)
+{
+    rd->modrm = rd->end;
+}
+
+/* Returns the MOD part of a ModR/M byte (0-3). */
+#define MOD(b) (((b) >> 6) & 0x3)
+
+/* Returns the REG part of a ModR/M byte (0-7). */
+#define REG(b) (((b) >> 3) & 0x7)
+
+/* Returns the RM part of a ModR/M byte (0-7). */
+#define RM(b)  ((b) & 0x7)
+
+/*
+ * Represents the encoding specification for an instruction. For performance
+ * reason, the spec is stored in a 64-bit integer, as follows:
+ *
+ * Byte 0-1: instruction mnemonic, interpreted as a signed 16-bit integer.
+ *         - If this value is positive, it should be one of the values defined
+ *           in enum x86_insn_mnemonic.
+ *         - If this value is zero, it designates an invalid instruction.
+ *         - If this value is negative, it represents an opcode extension.
+ * Byte 2: operand spec 1.
+ * Byte 3: operand spec 2.
+ * Byte 4: operand spec 3.
+ * Byte 5: operand spec 4.
+ * Byte 6: reserved; must be zero.
+ * Byte 7: reserved; must be zero.
+ *
+ * If any of the operands are not used, the spec byte should be set to 0.
+ */
+typedef uint64_t x86_insn_spec_t;
 
 /*
  * Specifies the encoding of an operand. Most operands are encoded in the form
@@ -41,45 +122,45 @@ enum x86_opr_spec
 
     /* General operand */
     O_Ap,
-    O_Eb, O_Ev, O_Ew,
+    O_Eb, O_Ep, O_Ev, O_Ew,
     O_Fv,
     O_Gb, O_Gv, O_Gw, O_Gz,
     O_Ib, O_Iv, O_Iw, O_Iz,
     O_Jb, O_Jz,
-    O_Ma, O_Mp,
+    O_Ma, O_Mp, O_Mw,
     O_Ob, O_Ov,
+    O_Rv,
     O_Sw,
     O_Xb, O_Xv, O_Xz,
     O_Yb, O_Yv, O_Yz,
 
     /* Immediate */
-    O_n = 0x10000,
+    O_n = 0x80,
     O_1 = O_n + 1,
     O_3 = O_n + 3,
 
     /* Segment registers. */
-    O_XS = 0x20000,
+    O_XS = 0x90,
     O_ES = O_XS + 0,
     O_CS = O_XS + 1,
     O_SS = O_XS + 2,
     O_DS = O_XS + 3,
 
-    /* Low-byte registers. */
-    O_XL = 0x30000,
+    /* Byte registers. */
+    O_XL = 0xa0,
     O_AL = O_XL + 0,
     O_CL = O_XL + 1,
     O_DL = O_XL + 2,
     O_BL = O_XL + 3,
 
-    /* High-byte registers. */
-    O_XH = 0x40000,
+    O_XH = 0xa4,
     O_AH = O_XH + 0,
     O_CH = O_XH + 1,
     O_DH = O_XH + 2,
     O_BH = O_XH + 3,
 
     /* 16-bit generic registers */
-    O_XX = 0x50000,
+    O_XX = 0xb0,
     O_AX = O_XX + 0,
     O_CX = O_XX + 1,
     O_DX = O_XX + 2,
@@ -90,7 +171,7 @@ enum x86_opr_spec
     O_DI = O_XX + 7,
 
     /* XX in 16-bit mode, EXX in 32- or 64-bit mode */
-    O_eXX = 0x60000,
+    O_eXX = 0xc0,
     O_eAX = O_eXX + 0,
     O_eCX = O_eXX + 1,
     O_eDX = O_eXX + 2,
@@ -101,7 +182,7 @@ enum x86_opr_spec
     O_eDI = O_eXX + 7,
 
     /* XX in 16-bit mode, EXX in 32-bit mode, RXX in 64-bit mode */
-    O_rXX = 0x70000,
+    O_rXX = 0xd0,
     O_rAX = O_rXX + 0,
     O_rCX = O_rXX + 1,
     O_rDX = O_rXX + 2,
@@ -114,19 +195,51 @@ enum x86_opr_spec
     O_XXXX
 };
 
-#define OP0(insn) { I_##insn, { 0 } }
-#define OP1(insn, oper1) { I_##insn, { O_##oper1 } }
-#define OP2(insn, oper1, oper2) { I_##insn, { O_##oper1, O_##oper2 } }
-#define OP3(insn, oper1, oper2, oper3) { I_##insn, { O_##oper1, O_##oper2, O_##oper3 } }
-#define OP_EMPTY { 0 }
+/* Build an encoding specification from scratch. */
+#define SPEC_MAKE(op,opr1,opr2,opr3,opr4) \
+    ( (uint64_t)(uint16_t)(int16_t)(op) | ((uint64_t)(opr1)<<16) | ((uint64_t)(opr2)<<24) \
+    | ((uint64_t)(opr3)<<32) | ((uint64_t)(opr4)<<40) )
+
+/* Get the operation in an encoding specification. */
+#define SPEC_INSN(spec) ((uint16_t)((spec) & 0xffff))
+
+/* Get the given operand (zero-based) in an encoding specification. */
+#define SPEC_OPERAND(spec,i) ((uint8_t)(((spec)>>(16+(i)*8))&0xff))
+
+/* Get the operands part of an encoding specification. */
+#define SPEC_OPERANDS(spec) ((spec) & 0xffffffffffff0000ULL)
+
+/* Merges two encoding specifications. */
+#define SPEC_MERGE(spec1,spec2) ((spec1)|(spec2))
+
+#define OP4(insn, oper1, oper2, oper3, oper4) SPEC_MAKE(I_##insn, O_##oper1, O_##oper2, O_##oper3, O_##oper4)
+#define OP3(insn, oper1, oper2, oper3) OP4(insn, oper1, oper2, oper3, NONE)
+#define OP2(insn, oper1, oper2) OP3(insn, oper1, oper2, NONE)
+#define OP1(insn, oper1) OP2(insn, oper1, NONE)
+#define OP0(insn) OP1(insn, NONE)
+#define OP_EMPTY  OP0(NONE)
 #define OP_EMPTY_4 OP_EMPTY, OP_EMPTY, OP_EMPTY, OP_EMPTY
 #define OP_EMPTY_8 OP_EMPTY_4, OP_EMPTY_4
 
+enum _extended_opcode_pseudo_insn
+{
+    I__EXT1 = -1,
+    I__EXT1A = -2,
+    I__EXT2 = -3,
+    I__EXT3 = -4,
+    I__EXT4 = -5,
+    I__EXT5 = -6,
+    I__EXT6 = -7,
+    I__EXT7 = -8,
+    I__EXT8 = -9,
+    I__EXT11 = -10
+};
+
 /*
- * Table for one-byte opcodes. 
+ * Instruction encoding specification for one-byte opcodes. 
  * See Table A-2 in Intel Reference, Volume 2, Appendix A.
  */
-static x86_opcode_entry x86_opcode_map_1byte[256] = 
+static const x86_insn_spec_t x86_opcode_map_1byte[256] = 
 {
     /* 00 */ OP2(ADD, Eb, Gb),
     /* 01 */ OP2(ADD, Ev, Gv),
@@ -250,22 +363,22 @@ static x86_opcode_entry x86_opcode_map_1byte[256] =
     /* f64 - The operand size is forced to a 64-bit operand size
      * when in 64-bit mode, regardless of size prefix. 
      */
-    /* 70 */ OP0(JO),
-    /* 71 */ OP0(JNO),
-    /* 72 */ OP0(JB),
-    /* 73 */ OP0(JNB),
-    /* 74 */ OP0(JE),
-    /* 75 */ OP0(JNE),
-    /* 76 */ OP0(JBE),
-    /* 77 */ OP0(JNBE),
-    /* 78 */ OP0(JS),
-    /* 79 */ OP0(JNS),
-    /* 7A */ OP0(JP),
-    /* 7B */ OP0(JNP),
-    /* 7C */ OP0(JL),
-    /* 7D */ OP0(JNL),
-    /* 7E */ OP0(JLE),
-    /* 7F */ OP0(JNLE),
+    /* 70 */ OP1(JO, Jb),
+    /* 71 */ OP1(JNO, Jb),
+    /* 72 */ OP1(JB, Jb),
+    /* 73 */ OP1(JNB, Jb),
+    /* 74 */ OP1(JE, Jb),
+    /* 75 */ OP1(JNE, Jb),
+    /* 76 */ OP1(JBE, Jb),
+    /* 77 */ OP1(JNBE, Jb),
+    /* 78 */ OP1(JS, Jb),
+    /* 79 */ OP1(JNS, Jb),
+    /* 7A */ OP1(JP, Jb),
+    /* 7B */ OP1(JNP, Jb),
+    /* 7C */ OP1(JL, Jb),
+    /* 7D */ OP1(JNL, Jb),
+    /* 7E */ OP1(JLE, Jb),
+    /* 7F */ OP1(JNLE, Jb),
 
     /* 80 */ OP2(_EXT1, Eb, Ib),
     /* 81 */ OP2(_EXT1, Ev, Iz),
@@ -397,15 +510,6 @@ static x86_opcode_entry x86_opcode_map_1byte[256] =
     /* FF */ OP0(_EXT5)  /* INC/DEC */
 };
 
-/* 
- * _EXT1 : immediate grp 1
- * _EXT2 : shift grp 2
- * _EXT3 : unary grp 3
- * _EXT11 : grp 11 - MOV
- */
-
-
-
 /**
  * Decodes instruction prefixes, and stores them in the instruction.
  * If one or more prefixes are found, returns the number of bytes consumed.
@@ -480,10 +584,139 @@ static int decode_prefix(const unsigned char *code, x86_insn_t *insn, const x86_
     return (p - code);
 }
 
-/* Access the ModR/M byte */
-#define MOD(b) (((b) >> 6) & 0x3)
-#define REG(b) (((b) >> 3) & 0x7)
-#define RM(b)  ((b) & 0x7)
+static x86_insn_spec_t
+process_opcode_extension(
+    x86_insn_spec_t spec,
+    uint32_t opcode, 
+    unsigned char modrm)
+{
+    uint16_t op = SPEC_INSN(spec);
+    int reg = REG(modrm);
+    int mod = MOD(modrm);
+
+    if (op == I__EXT1)
+    {
+        static const x86_insn_spec_t map[8] =
+        {
+            OP0(ADD), OP0(OR),  OP0(ADC), OP0(SBB),
+            OP0(AND), OP0(SUB), OP0(XOR), OP0(CMP)
+        };
+        return SPEC_MERGE(map[reg], spec);
+    }
+
+    if (op == I__EXT2)
+    {
+        static const x86_insn_spec_t map[8] = { OP0(POP) };
+        return SPEC_MERGE(map[reg], spec);
+    }
+
+    if (op == I__EXT2)
+    {
+        static const x86_insn_spec_t map[8] =
+        {
+            OP0(ROL), OP0(ROR), OP0(RCL), OP0(RCR),
+            OP0(SHL), OP0(SHR), OP_EMPTY, OP0(SAR)
+        };
+        return SPEC_MERGE(map[reg], spec);
+    }
+
+    if (op == I__EXT3)
+    {
+        static const x86_insn_spec_t map_f6[8] =
+        {
+            OP2(TEST, Eb, Ib),
+            OP_EMPTY,
+            OP1(NOT,  Eb),
+            OP1(NEG,  Eb),
+            OP2(MUL,  Eb, AL),
+            OP2(IMUL, Eb, AL),
+            OP2(DIV,  Eb, AL),
+            OP2(IDIV, Eb, AL)
+        };
+        static const x86_insn_spec_t map_f7[8] =
+        {
+            OP2(TEST, Ev, Iz),
+            OP_EMPTY,
+            OP1(NOT,  Ev),
+            OP1(NEG,  Ev),
+            OP2(MUL,  Ev, rAX),
+            OP2(IMUL, Ev, rAX),
+            OP2(DIV,  Ev, rAX),
+            OP2(IDIV, Ev, rAX)
+        };
+        if (opcode == 0xF6)
+            return map_f6[reg];
+        else /* opcode == 0xF7 */
+            return map_f7[reg];
+    }
+
+    if (op == I__EXT4)
+    {
+        static const x86_insn_spec_t map[8] = 
+        {
+            OP1(INC, Eb), OP1(DEC, Eb)
+        };
+        return map[reg];
+    }
+
+    if (op == I__EXT5)
+    {
+        static const x86_insn_spec_t map[8] = 
+        {
+            OP1(INC,  Eb), OP1(DEC,  Eb), OP1(CALLN, Ev), OP1(CALLF, Ep),
+            OP1(JMPN, Ev), OP1(JMPF, Mp), OP1(PUSH,  Ev), OP_EMPTY
+        };
+        return map[reg];
+    }
+
+    if (op == I__EXT6)
+    {
+        static const x86_insn_spec_t map[8] = 
+        {
+            OP2(SLDT, Rv, Mw),
+            OP2(STR, Rv, Mw),
+            OP1(LLDT, Ew),
+            OP1(LTR, Ew),
+            OP1(VERR, Ew),
+            OP1(VERW, Ew),
+            OP_EMPTY,
+            OP_EMPTY
+        };
+        return map[reg];
+    }
+
+    /* Invalid opcode extension. */
+    return 0;
+}
+
+/* Decodes the opcode of an instruction and returns its encoding 
+ * specification.
+ */
+static x86_insn_spec_t
+decode_opcode(
+    x86_insn_reader_t *rd,
+    int cpu_size)        
+{
+    unsigned char c;
+    x86_insn_spec_t spec;
+
+    /* Process the first byte of the opcode. */
+    c = read_byte(rd);
+    mark_modrm(rd);
+    spec = x86_opcode_map_1byte[c];
+    
+    /* Return the encoding spec if it is a valid instruction. */
+    if (SPEC_INSN(spec) > 0)
+        return spec;
+
+    /* Process opcode extension if required. */
+    if (SPEC_INSN(spec) < 0)
+    {
+        return process_opcode_extension(spec, c, read_modrm(rd));
+    }
+
+    return 0;
+}
 
 #define FILL_REG(_opr, _reg) \
     do { \
@@ -504,9 +737,24 @@ static int decode_prefix(const unsigned char *code, x86_insn_t *insn, const x86_
         (_opr)->val.mem.displacement = (_disp); \
     } while (0)
 
+#define FILL_IMM(_opr, _size, _imm) \
+    do { \
+        (_opr)->size = (_size); \
+        (_opr)->type = OPR_IMM; \
+        (_opr)->val.imm = _imm; \
+    } while (0)
+
+#define FILL_REL(_opr, _size, _rel) \
+    do { \
+        (_opr)->size = (_size); \
+        (_opr)->type = OPR_REL; \
+        (_opr)->val.rel = _rel; \
+    } while (0)
+
 /* Converts byte register 0-7 from machine encoding to logical identifier. */
 #define REG_CONVERT_BYTE(number) REG_MAKE(R_TYPE_GENERAL, (number) & 3, OPR_8BIT, (number) >> 2)
 
+#if 0
 struct x86_raw_insn_t
 {
     uint32_t opcode;
@@ -515,13 +763,7 @@ struct x86_raw_insn_t
     uint32_t disp;
     uint32_t imm;
 };
-
-#define EAT_BYTE(pend) (pend += 1, pend[-1])
-#define EAT_WORD(pend) (pend += 2, (uint16_t)pend[-2] | ((uint16_t)pend[-1] << 8))
-#define EAT_DWORD(pend) (pend += 4, \
-    (uint32_t)pend[-4] | ((uint32_t)pend[-3] << 8) | \
-    ((uint32_t)pend[-2] << 16) | ((uint32_t)pend[-2] << 24))
-#define EAT_MODRM(pend, code) (pend = (pend == code? pend + 1 : pend), pend[-1])
+#endif
 
 /* Decodes a memory (or optionally register) operand. A ModR/M byte follows
  * the opcode and specifies the operand. If reg_type is not zero, the operand
@@ -530,21 +772,17 @@ struct x86_raw_insn_t
  * the following values: a base register, an index register, a scaling factor, 
  * and a displacement.
  *
- * The function returns the new end of used bytes if successful. If the 
- * instruction is invalid, returns NULL.
+ * The function returns non-zero if successful, or 0 if the instruction is
+ * invalid.
  */
-static const unsigned char * 
-decode_memory_operand(
+static int decode_memory_operand(
     x86_opr_t *opr,             /* decoded operand */
-    const unsigned char *begin, /* begin of modrm byte */
-    const unsigned char *end,   /* one past the last-used byte */
+    x86_insn_reader_t *rd,      /* stream reader */
     int opr_size,               /* size of the register or operand */
     int reg_type,               /* if non-zero, type of the register */
     int cpu_size)               /* word-size of the cpu */
 {
-    unsigned char modrm = *begin;
-    if (end == begin)
-        ++end;
+    unsigned char modrm = read_modrm(rd);
 
     if (cpu_size == OPR_16BIT)
     {
@@ -559,15 +797,15 @@ decode_memory_operand(
                 FILL_REG(opr, REG_CONVERT_BYTE(RM(modrm)));
             else
                 FILL_REG(opr, REG_MAKE(reg_type, RM(modrm), opr_size, 0));
-            return end;
+            return 1;
         }
 
         /* Decode a direct memory address if MOD = (00) and RM = (110). */
         if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16 */
         {
-            uint32_t disp = EAT_WORD(end);
+            uint32_t disp = read_word(rd);
             FILL_MEM(opr, opr_size, R_DS, 0, 0, 0, disp);
-            return end;
+            return 1;
         }
 
         /* Decode an indirect memory address XX[+YY][+disp]. */
@@ -599,10 +837,10 @@ decode_memory_operand(
             break;
         }
         if (MOD(modrm) == 1) /* disp8 */
-            opr->val.mem.displacement = EAT_BYTE(end);
+            opr->val.mem.displacement = read_byte(rd);
         else if (MOD(modrm) == 2) /* disp16 */
-            opr->val.mem.displacement = EAT_WORD(end);
-        return end;
+            opr->val.mem.displacement = read_word(rd);
+        return 1;
     }
     else if (cpu_size == OPR_32BIT)
     {
@@ -611,14 +849,12 @@ decode_memory_operand(
     return 0; /* should not reach here */
 }
 
-/* Decode an operand from an instruction. If successful, returns a pointer to 
- * one past the end of the used bytes. If failed, returns NULL.
+/* Decode an operand from an instruction. If successful, returns non-zero.
+ * If failed, returns zero.
  */
-static const unsigned char *
-decode_operand(
+static int decode_operand(
     x86_opr_t *opr,             /* decoded operand */
-    const unsigned char *begin, /* begin of modrm byte */
-    const unsigned char *end,   /* one past the last-used byte */
+    x86_insn_reader_t *rd,      /* stream reader */
     int spec,                   /* operand encoding specification */
     const x86_options_t *opt)   /* options */
 {
@@ -628,18 +864,12 @@ decode_operand(
     int cpu_size = CPU_SIZE(opt);
     /* int opr_size; */
 
-    /* Try decode special operands. */
-    if ((spec & 0xff0000) == O_n) /* immediate */
+    /* Decode specific registers. */
+    if (spec >= 0x90)
     {
-        opr->size = OPR_8BIT;
-        opr->type = OPR_IMM;
-        opr->val.imm = (spec - O_n);
-        return end;
-    }
-    else if (spec & 0xff0000) /* specific registers */
-    {
+        int reg;
         int number = spec & 0xf;
-        switch (spec & 0xff0000)
+        switch (spec & 0xf0)
         {
         case O_XS: /* segment register */
             reg = REG_MAKE(R_TYPE_SEGMENT, number, OPR_16BIT, 0);
@@ -664,27 +894,37 @@ decode_operand(
             return 0;
         }
         FILL_REG(opr, reg);
-        return end;
+        return 1;
     }
 
+    /* Decode immediates. */
+    if (spec >= 0x80)
+    {
+        opr->size = OPR_8BIT;
+        opr->type = OPR_IMM;
+        opr->val.imm = (spec - O_n);
+        return 1;
+    }
+
+    /* Decode regular operands. */
     switch (spec)
     {
     case O_Gb:
         /* REG(modrm) selects byte-size GPR. */
         /* TBD: check AH-DH */
-        modrm = EAT_MODRM(end, begin);
+        modrm = read_modrm(rd);
         FILL_REG(opr, REG_CONVERT_BYTE(REG(modrm)));
         break;
 
     case O_Gv:
         /* REG(modrm) selects GPR of native size (16, 32, or 64 bit) */
-        modrm = EAT_MODRM(end, begin);
+        modrm = read_modrm(rd);
         FILL_REG(opr, REG_MAKE(R_TYPE_GENERAL, REG(modrm), cpu_size, 0));
         break;
 
     case O_Gw:
         /* REG(modrm) selects word-size GPR. */
-        modrm = EAT_MODRM(end, begin);
+        modrm = read_modrm(rd);
         reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), OPR_16BIT, 0);
         FILL_REG(opr, reg);
         break;
@@ -693,7 +933,7 @@ decode_operand(
         /* REG(modrm) selects word-size GPR for 16-bit, dword-size GPR for
          * 32 or 64 bit. 
          */
-        modrm = EAT_MODRM(end, begin);
+        modrm = read_modrm(rd);
         reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), 
                 CPU_SIZE(opt) == OPR_16BIT ? OPR_16BIT : OPR_32BIT, 0);
         FILL_REG(opr, reg);
@@ -704,41 +944,67 @@ decode_operand(
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is byte.
          */
-        end = decode_memory_operand(opr, begin, end, OPR_8BIT, R_TYPE_GENERAL, cpu_size);
-        break;
+        return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size);
 
     case O_Ev:
         /* The operand is either a general-purpose register or a memory
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is the native word size of the CPU.
          */
-        end = decode_memory_operand(opr, begin, end, cpu_size, R_TYPE_GENERAL, cpu_size);
-        break;
+        return decode_memory_operand(opr, rd, cpu_size, R_TYPE_GENERAL, cpu_size);
 
     case O_Ew:
         /* The operand is either a general-purpose register or a memory
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is word.
          */
-        end = decode_memory_operand(opr, begin, end, OPR_16BIT, R_TYPE_GENERAL, cpu_size);
+        return decode_memory_operand(opr, rd, OPR_16BIT, R_TYPE_GENERAL, cpu_size);
+
+    case O_Ib: /* byte immediate */
+        FILL_IMM(opr, OPR_8BIT, read_byte(rd));
+        break;
+
+    case O_Iv: /* native size immediate */
+        FILL_IMM(opr, cpu_size, read_imm(rd, cpu_size));
+        break;
+
+    case O_Iw: /* word immediate */
+        FILL_IMM(opr, OPR_16BIT, read_word(rd));
+        break;
+
+    case O_Iz: /* native or dword, whichever is smaller */
+        if (cpu_size == OPR_16BIT)
+            FILL_IMM(opr, OPR_16BIT, read_word(rd));
+        else
+            FILL_IMM(opr, OPR_32BIT, read_dword(rd));
+        break;
+
+    case O_Jb: /* immediate encodes relative offset (byte) */
+        FILL_REL(opr, OPR_8BIT, read_byte(rd));
         break;
 
     default:
         return 0; /* invalid specification */
     }
-    return end;
+    return 1;
 }
 
-int x86_decode(const unsigned char *code, x86_insn_t *insn, const x86_options_t *opt)
+int x86_decode(
+    const unsigned char *code_begin,
+    const unsigned char *code_end,
+    x86_insn_t *insn, 
+    const x86_options_t *opt)
 {
-    const unsigned char *p = code;
-    const unsigned char *end;
-    unsigned char c;
+    const unsigned char *p = code_begin;
     int count, i;
-    const struct x86_opcode_entry *ent;
+    x86_insn_reader_t rd;
+    x86_insn_spec_t spec;
 
     /* Clear instruction. */
-    memset(insn, 0, sizeof(struct x86_insn_t));
+    memset(insn, 0, sizeof(x86_insn_t));
+
+    /* Initialize reader. */
+    init_reader(&rd, code_begin, code_end);
 
     /* Decode prefixes. */
     count = decode_prefix(p, insn, opt);
@@ -746,25 +1012,23 @@ int x86_decode(const unsigned char *code, x86_insn_t *insn, const x86_options_t 
         return -1;
     p += count;
 
-    /* Process the first byte of the opcode. */
-    c = *p++;
-    ent = &x86_opcode_map_1byte[c];
-    if (ent->op == 0) /* undefined opcode */
+    /* Decode the opcode and get encoding specification. */
+    spec = decode_opcode(&rd, CPU_SIZE(opt));
+    if (SPEC_INSN(spec) == 0)
         return -1;
-    insn->op = ent->op;
+    insn->op = SPEC_INSN(spec);
 
-    /* Parse arguments. */
-    end = p;
+    /* Decode operands. */
     for (i = 0; i < MAX_OPERANDS; i++)
     {
-        int def = ent->operands[i];
-        if (def == 0) /* no more operands */
+        int opr_spec = SPEC_OPERAND(spec, i);
+        if (opr_spec == 0) /* no more operands */
             break;
-        end = decode_operand(&insn->oprs[i], p, end, def, opt);
-        if (end == 0) /* decoding failed */
+
+        if (!decode_operand(&insn->oprs[i], &rd, opr_spec, opt)) /* failed */
             return -1;
     }
 
     /* Returns the number of bytes consumed. */
-    return end - code;
+    return (rd.end - rd.prefix);
 }
