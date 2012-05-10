@@ -119,7 +119,6 @@ struct x86_operand_t
 #define X86_MODE_64BIT OPR_64BIT
 #endif
 
-
 /**
  * This file defines logical identifiers for x86 registers addressible in
  * an instruction. For performance consideration, the values of these 
@@ -141,10 +140,6 @@ struct x86_operand_t
  * indicates the lowerest bits of the register. The exceptions are AH-DH, 
  * whose offsets are 1 to indicate that they refer to the high byte.
  */
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Enumerated values of register size. */
 enum x86_reg_size
@@ -212,7 +207,7 @@ enum x86_register_number
 
 /* Build a register identifier statically using all 4 arguments. */
 #define REG_MAKE_4(type, number, bits, offset) \
-    REG_MAKE(R_TYPE_##type, R_SIZE_##bits##BIT, R_NUMBER_##number, R_OFFSET_##offset)
+    REG_MAKE(R_TYPE_##type, R_NUMBER_##number, R_SIZE_##bits##BIT, R_OFFSET_##offset)
 
 /* Build a register identifier statically, assuming 0 offset. */
 #define REG_MAKE_3(type, number, bits) REG_MAKE_4(type, number, bits, NONE)
@@ -514,6 +509,22 @@ int x86_decode(
     const unsigned char *code, 
     struct x86_insn_t *insn, 
     const x86_options_t *opt);
+
+#define X86_FMT_SYNTAX(f) ((f) & 1)
+#define X86_FMT_INTEL   0
+#define X86_FMT_ATT     1
+
+#define X86_FMT_CASE(f) ((f) & 2)
+#define X86_FMT_LOWER   0
+#define X86_FMT_UPPER   2
+
+typedef unsigned int x86_fmt_t;
+
+/* Formats an instruction as a string. */
+void x86_format(
+    const x86_insn_t *insn,
+    char buffer[256],
+    x86_fmt_t fmt);
 
 #ifdef __cplusplus
 }

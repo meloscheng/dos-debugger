@@ -23,12 +23,19 @@ enum _extended_opcode_pseudo_insn
 };
 
 /*
- * An operand is denoted in the form "Zz", with a few additional special 
- * values for specific cases. The first letter specifies the addressing 
- * method, and the rest letters specify the operand type.
- * See Intel Reference, Volume 2, Appendix A.2.
+ * Specifies the encoding of an operand. Most operands are encoded in the form
+ * "Zz", where "Z" specifies the addressing method and "z" specifies the data
+ * type. These encodings are represented by a value using 16 bits. 
+ *
+ * The rest operands are encoded with special values. These encodings are
+ * represented with a value above 0x10000.
+ *
+ * The special value 0 means the operand is not used.
+ *
+ * See Intel Reference, Volume 2, Appendix A.2 for an explanation of the 
+ * abbreviations for addressing method and data type.
  */
-enum x86_operand_notation
+enum x86_opr_spec
 {
     O_NONE = 0,
 
@@ -475,8 +482,8 @@ static int decode_prefix(const unsigned char *code, x86_insn_t *insn, const x86_
 
 /* Access the ModR/M byte */
 #define MOD(b) (((b) >> 6) & 0x3)
-#define REG(b) ((b) & 0x7)
-#define RM(b)  (((b) >> 3) & 0x3)
+#define REG(b) (((b) >> 3) & 0x7)
+#define RM(b)  ((b) & 0x7)
 
 #define FILL_REG(_opr, _reg) \
     do { \
@@ -604,12 +611,15 @@ decode_memory_operand(
     return 0; /* should not reach here */
 }
 
+/* Decode an operand from an instruction. If successful, returns a pointer to 
+ * one past the end of the used bytes. If failed, returns NULL.
+ */
 static const unsigned char *
 decode_operand(
     x86_opr_t *opr,             /* decoded operand */
     const unsigned char *begin, /* begin of modrm byte */
     const unsigned char *end,   /* one past the last-used byte */
-    int def,                    /* operand encoding specification */
+    int spec,                   /* operand encoding specification */
     const x86_options_t *opt)   /* options */
 {
     int reg = R_NONE;
@@ -618,25 +628,65 @@ decode_operand(
     int cpu_size = CPU_SIZE(opt);
     /* int opr_size; */
 
-    switch (def)
+    /* Try decode special operands. */
+    if ((spec & 0xff0000) == O_n) /* immediate */
+    {
+        opr->size = OPR_8BIT;
+        opr->type = OPR_IMM;
+        opr->val.imm = (spec - O_n);
+        return end;
+    }
+    else if (spec & 0xff0000) /* specific registers */
+    {
+        int number = spec & 0xf;
+        switch (spec & 0xff0000)
+        {
+        case O_XS: /* segment register */
+            reg = REG_MAKE(R_TYPE_SEGMENT, number, OPR_16BIT, 0);
+            break;
+        case O_XL: /* low byte register */
+            reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_8BIT, 0);
+            break;
+        case O_XH: /* high byte register */
+            reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_8BIT, R_OFFSET_HIBYTE);
+            break;
+        case O_XX: /* 16-bit GPR */
+            reg = REG_MAKE(R_TYPE_GENERAL, number, OPR_16BIT, 0);
+            break;
+        case O_eXX: /* 16-bit or 32-bit */
+            reg = REG_MAKE(R_TYPE_GENERAL, number, 
+                (cpu_size == OPR_16BIT)? OPR_16BIT : OPR_32BIT, 0);
+            break;
+        case O_rXX: /* 16-bit, 32-bit, or 64-bit */
+            reg = REG_MAKE(R_TYPE_GENERAL, number, cpu_size, 0);
+            break;
+        default:
+            return 0;
+        }
+        FILL_REG(opr, reg);
+        return end;
+    }
+
+    switch (spec)
     {
     case O_Gb:
         /* REG(modrm) selects byte-size GPR. */
         /* TBD: check AH-DH */
         modrm = EAT_MODRM(end, begin);
-        reg = REG_CONVERT_BYTE(REG(modrm));
+        FILL_REG(opr, REG_CONVERT_BYTE(REG(modrm)));
         break;
 
     case O_Gv:
         /* REG(modrm) selects GPR of native size (16, 32, or 64 bit) */
         modrm = EAT_MODRM(end, begin);
-        reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), CPU_SIZE(opt), 0);
+        FILL_REG(opr, REG_MAKE(R_TYPE_GENERAL, REG(modrm), cpu_size, 0));
         break;
 
     case O_Gw:
         /* REG(modrm) selects word-size GPR. */
         modrm = EAT_MODRM(end, begin);
         reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), OPR_16BIT, 0);
+        FILL_REG(opr, reg);
         break;
 
     case O_Gz:
@@ -646,6 +696,7 @@ decode_operand(
         modrm = EAT_MODRM(end, begin);
         reg = REG_MAKE(R_TYPE_GENERAL, REG(modrm), 
                 CPU_SIZE(opt) == OPR_16BIT ? OPR_16BIT : OPR_32BIT, 0);
+        FILL_REG(opr, reg);
         break;
 
     case O_Eb:
@@ -673,35 +724,7 @@ decode_operand(
         break;
 
     default:
-        break;
-    }
-
-
-    switch (def & 0xff0000)
-    {
-    case 0: /* general operand Zz */
-        break;
-    case O_n: /* immediate */
-        break;
-    case O_XS: /* segment register */
-        reg = REG_MAKE(R_TYPE_SEGMENT, def & 0xf, OPR_16BIT, 0);
-        break;
-    case O_XL: /* low byte register */
-        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_8BIT, 0);
-        break;
-    case O_XH: /* high byte register */
-        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_8BIT, R_OFFSET_HIBYTE);
-        break;
-    case O_XX: /* 16-bit GPR */
-        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, OPR_16BIT, 0);
-        break;
-    case O_eXX: /* 16-bit or 32-bit */
-        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, 
-            (cpu_size == OPR_16BIT)? OPR_16BIT : OPR_32BIT, 0);
-        break;
-    case O_rXX: /* 16-bit, 32-bit, or 64-bit */
-        reg = REG_MAKE(R_TYPE_GENERAL, def & 0xf, cpu_size, 0);
-        break;
+        return 0; /* invalid specification */
     }
     return end;
 }

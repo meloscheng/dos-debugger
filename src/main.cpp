@@ -129,7 +129,7 @@ static void test_decode()
     
     x86_insn_t insn;
     x86_options_t opt;
-    opt.mode = X86_MODE_32BIT;
+    opt.mode = OPR_16BIT;
     
     int count = x86_decode(code, &insn, &opt);
     if (count <= 0)
@@ -137,12 +137,19 @@ static void test_decode()
         std::cerr << "Invalid instruction!" << std::endl;
         return;
     }
+    
+    // Display the string.
+    char text[256];
+    x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
+    std::cout << text << std::endl;
+#if 0
     if (count != sizeof(code))
     {
         std::cerr << "Decode wrong!" << std::endl;
         return;
     }
-    std::cout << "Decode OK.\n";
+#endif
+    std::cout << "Finished." << std::endl;
 }
 
 int main(int argc, char* argv[])
