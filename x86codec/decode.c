@@ -32,6 +32,11 @@ init_reader(x86_insn_reader_t *rd, const unsigned char *begin, const unsigned ch
     rd->opcode = rd->modrm = rd->end = rd->prefix;
 }
 
+static uint8_t peek_byte(const x86_insn_reader_t *rd)
+{
+    return *rd->end;
+}
+
 static uint8_t read_byte(x86_insn_reader_t *rd)
 {
     const unsigned char *p = rd->end;
@@ -72,6 +77,12 @@ static unsigned char read_modrm(x86_insn_reader_t *rd)
 static void mark_modrm(x86_insn_reader_t *rd)
 {
     rd->modrm = rd->end;
+}
+
+/* Marks the next byte as opcode. */
+static void mark_opcode(x86_insn_reader_t *rd)
+{
+    rd->modrm = rd->opcode = rd->end;
 }
 
 /* Returns the MOD part of a ModR/M byte (0-3). */
@@ -511,77 +522,56 @@ static const x86_insn_spec_t x86_opcode_map_1byte[256] =
 };
 
 /**
- * Decodes instruction prefixes, and stores them in the instruction.
- * If one or more prefixes are found, returns the number of bytes consumed.
- * If no prefix is found, returns 0. 
- * If the instruction is invalid, returns -1.
+ * Decodes instruction prefixes. This function does not check the validity
+ * of prefix specifications.
  */
-static int decode_prefix(const unsigned char *code, x86_insn_t *insn, const x86_options_t *opt)
+static x86_insn_prefix_t
+decode_prefix(x86_insn_reader_t *rd, const x86_options_t *opt)
 {
-    /* Prefix table, where prefix_grp[c] = the prefix group of byte c.
-     * The group number can be from 1 to 5, whose meaning is as follows:
-     *
-     *   Group 1-4 : legacy group 1-4.
-     *   Group 5: REX prefix (only available in 64-bit mode).
-     *
-     * At most one prefix from each group may be present in an instruction.
-     * If a prefix is already present, it is an invalid instruction. If an
-     * REX prefix is encountered, no more prefixes are read because an REX 
-     * prefix is required to immediately preceed the opcode.
+    /* Decode each byte until the byte is not a prefix or is an REX prefix,
+     * because an REX prefix is required to immediately preceed the opcode.
      */
-    static const unsigned char prefix_grp[256] = 
+    x86_insn_prefix_t pfx = 0;
+    for ( ; ; )
     {
-        /* 0 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 1 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 2 */  0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0,
-        /* 3 */  0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0,
-        /* 4 */  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 
-        /* 5 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 6 */  0, 0, 0, 0, 2, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 7 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 8 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* 9 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* A */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* B */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* C */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* D */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* E */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        /* F */  1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    };
+        unsigned char c = peek_byte(rd);
+        x86_insn_prefix_t t = 0;
 
-    const unsigned char *p = code;
-    for ( ; ; p++)
-    {
-        unsigned char c = *p;
-
-        /* Find out which prefix group the byte belongs to. */
-        unsigned char grp = prefix_grp[c];
-
-        /* Finish if this byte is not a prefix. */
-        if (grp == 0)
-            break;
-
-        /* Finish if this byte is REX prefix, but we're not in 64-bit mode. */
-        if (grp == 5 && CPU_SIZE(opt) != OPR_64BIT)
-            break;
-
-        /* Make sure only one prefix from each group is present. */
-        if (insn->prefix[grp - 1] != 0)
-            return -1;
-
-        /* Set the prefix in the instruction. */
-        insn->prefix[grp - 1] = c;
-
-        /* If this byte is REX prefix, we needn't check prefixes no more. */
-        if (grp == 5)
+        /* Check for REX prefix if we're in 64-bit mode. */
+        if (CPU_SIZE(opt) == OPR_64BIT && (c & 0xf0) == 0x40)
         {
-            p++;
+            read_byte(rd);
             break;
         }
+
+        /* Check for legacy prefixes. */
+        switch (c)
+        {
+        case 0xF0: t = PFX_LOCK; break;
+        case 0xF2: t = PFX_REPNE; break;
+        case 0xF3: t = PFX_REPE; break;
+        case 0x2E: t = PFX_CS; break;
+        case 0x36: t = PFX_SS; break;
+        case 0x3E: t = PFX_DS; break;
+        case 0x26: t = PFX_ES; break;
+        case 0x64: t = PFX_FS; break;
+        case 0x65: t = PFX_GS; break;
+        case 0x66: t = PFX_OPERAND_SIZE; break;
+        case 0x67: t = PFX_ADDRESS_SIZE; break;
+        }
+        if (t == 0)
+            break;
+
+        /* Consume 1 byte. */
+        read_byte(rd);
+        pfx |= t;
     }
 
-    /* Return the number of bytes consumed. */
-    return (p - code);
+    /* If any prefix was read, update the opcode pointer. */
+    if (pfx)
+        mark_opcode(rd);
+
+    return pfx;
 }
 
 static x86_insn_spec_t
@@ -666,7 +656,7 @@ process_opcode_extension(
     {
         static const x86_insn_spec_t map[8] = 
         {
-            OP1(INC,  Eb), OP1(DEC,  Eb), OP1(CALLN, Ev), OP1(CALLF, Ep),
+            OP1(INC,  Ev), OP1(DEC,  Ev), OP1(CALLN, Ev), OP1(CALLF, Ep),
             OP1(JMPN, Ev), OP1(JMPF, Mp), OP1(PUSH,  Ev), OP_EMPTY
         };
         return map[reg];
@@ -773,6 +763,14 @@ decode_opcode(
         (_opr)->val.rel = _rel; \
     } while (0)
 
+static void fill_ptr(x86_opr_t *opr, int opr_size, uint16_t seg, uint64_t off)
+{
+    opr->type = OPR_PTR;
+    opr->size = opr_size;
+    opr->val.ptr.seg = seg;
+    opr->val.ptr.off = off;
+}
+
 /* Converts byte register 0-7 from machine encoding to logical identifier. */
 #define REG_CONVERT_BYTE(number) REG_MAKE(R_TYPE_GENERAL, (number) & 3, OPR_8BIT, (number) >> 2)
 
@@ -798,13 +796,15 @@ struct x86_raw_insn_t
  * invalid.
  */
 static int decode_memory_operand(
-    x86_opr_t *opr,             /* decoded operand */
-    x86_insn_reader_t *rd,      /* stream reader */
-    int opr_size,               /* size of the register or operand */
-    int reg_type,               /* if non-zero, type of the register */
-    int cpu_size)               /* word-size of the cpu */
+    x86_opr_t *opr,         /* decoded operand */
+    x86_insn_reader_t *rd,  /* stream reader */
+    int opr_size,           /* size of the register or operand */
+    int reg_type,           /* if non-zero, type of the register */
+    int cpu_size,           /* word-size of the cpu */
+    x86_insn_prefix_t pfx)  /* instruction prefix */
 {
     unsigned char modrm = read_modrm(rd);
+    x86_reg_t seg = 0; /* default segment */
 
     if (cpu_size == OPR_16BIT)
     {
@@ -822,46 +822,59 @@ static int decode_memory_operand(
             return 1;
         }
 
-        /* Decode a direct memory address if MOD = (00) and RM = (110). */
-        if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16 */
+        /* Take into account segment override prefix if any. */
+        switch (pfx & PFX_GROUP2)
         {
-            uint32_t disp = read_word(rd);
-            FILL_MEM(opr, opr_size, R_DS, 0, 0, 0, disp);
+        case 0: break;
+        case PFX_ES: seg = R_ES; break;
+        case PFX_CS: seg = R_CS; break;
+        case PFX_SS: seg = R_SS; break;
+        case PFX_DS: seg = R_DS; break;
+        case PFX_FS: seg = R_FS; break;
+        case PFX_GS: seg = R_GS; break;
+        }
+
+        /* Decode a direct memory address if MOD = (00) and RM = (110). */
+        if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16, sign-extended */
+        {
+            int16_t disp = read_word(rd);
+            FILL_MEM(opr, opr_size, seg, 0, 0, 0, disp);
             return 1;
         }
 
         /* Decode an indirect memory address XX[+YY][+disp]. */
+        /* We use the default segment register here. */
         switch (RM(modrm))
         {
         case 0: /* [BX+SI] */
-            FILL_MEM(opr, opr_size, R_DS, R_BX, R_SI, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BX, R_SI, 1, 0);
             break;
         case 1: /* [BX+DI] */
-            FILL_MEM(opr, opr_size, R_DS, R_BX, R_DI, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BX, R_DI, 1, 0);
             break;
         case 2: /* [BP+SI] */
-            FILL_MEM(opr, opr_size, R_SS, R_BP, R_SI, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BP, R_SI, 1, 0);
             break;
         case 3: /* [BP+DI] */
-            FILL_MEM(opr, opr_size, R_DS, R_BP, R_SI, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BP, R_SI, 1, 0);
             break;
         case 4: /* [SI] */
-            FILL_MEM(opr, opr_size, R_DS, R_SI, 0, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_SI, 0, 1, 0);
             break;
         case 5: /* [DI] */
-            FILL_MEM(opr, opr_size, R_DS, R_DI, 0, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_DI, 0, 1, 0);
             break;
         case 6: /* [BP] */
-            FILL_MEM(opr, opr_size, R_SS, R_BP, 0, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BP, 0, 1, 0);
             break;
         case 7: /* [BX] */
-            FILL_MEM(opr, opr_size, R_DS, R_BX, 0, 1, 0);
+            FILL_MEM(opr, opr_size, seg, R_BX, 0, 1, 0);
             break;
         }
-        if (MOD(modrm) == 1) /* disp8 */
-            opr->val.mem.displacement = read_byte(rd);
-        else if (MOD(modrm) == 2) /* disp16 */
-            opr->val.mem.displacement = read_word(rd);
+        if (MOD(modrm) == 1) /* disp8, sign-extended */
+            opr->val.mem.displacement = (int8_t)read_byte(rd);
+        else if (MOD(modrm) == 2) /* disp16, sign-extended */
+            opr->val.mem.displacement = (int16_t)read_word(rd);
         return 1;
     }
     else if (cpu_size == OPR_32BIT)
@@ -878,6 +891,7 @@ static int decode_operand(
     x86_opr_t *opr,             /* decoded operand */
     x86_insn_reader_t *rd,      /* stream reader */
     int spec,                   /* operand encoding specification */
+    x86_insn_prefix_t pfx,      /* instruction prefix */
     const x86_options_t *opt)   /* options */
 {
     int reg = R_NONE;
@@ -970,21 +984,21 @@ static int decode_operand(
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is byte.
          */
-        return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size);
+        return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size, pfx);
 
     case O_Ev:
         /* The operand is either a general-purpose register or a memory
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is the native word size of the CPU.
          */
-        return decode_memory_operand(opr, rd, cpu_size, R_TYPE_GENERAL, cpu_size);
+        return decode_memory_operand(opr, rd, cpu_size, R_TYPE_GENERAL, cpu_size, pfx);
 
     case O_Ew:
         /* The operand is either a general-purpose register or a memory
          * address, encoded by ModR/M + SIB + displacement. The size of 
          * the operand is word.
          */
-        return decode_memory_operand(opr, rd, OPR_16BIT, R_TYPE_GENERAL, cpu_size);
+        return decode_memory_operand(opr, rd, OPR_16BIT, R_TYPE_GENERAL, cpu_size, pfx);
 
     case O_Ib: /* byte immediate */
         FILL_IMM(opr, OPR_8BIT, read_byte(rd));
@@ -1041,13 +1055,26 @@ static int decode_operand(
             FILL_MEM(opr, cpu_size, R_DS, R_NONE, R_NONE, 1, read_dword(rd));
         break;
 
-    case O_Mp: /* The ModR/M byte must refer to memory of seg:ptr */
-        return decode_memory_operand(opr, rd, cpu_size, 0, cpu_size);
+    case O_Mp: /* ModR/M refers to memory containing far pointer seg:ptr
+                * of 32, 48, or 80 bits.
+                */
+        if (cpu_size == OPR_16BIT)
+            return decode_memory_operand(opr, rd, OPR_32BIT, 0, cpu_size, pfx);
+        else
+            return 0;
 
     case O_Ap: /* No ModR/M byte; address encoded in imm in the form of
                 * seg:ptr */
-        FILL_IMM(opr, cpu_size, read_imm(rd, cpu_size));    /* ptr */
-        FILL_IMM(opr, OPR_16BIT, read_word(rd));            /* seg */
+        if (cpu_size == OPR_16BIT)
+        {
+            uint16_t off = read_word(rd);
+            uint16_t seg = read_word(rd);
+            fill_ptr(opr, OPR_32BIT, seg, off);
+        }
+        else
+        {
+            return 0;
+        }
         break;
 
     default:
@@ -1062,10 +1089,9 @@ int x86_decode(
     x86_insn_t *insn, 
     const x86_options_t *opt)
 {
-    const unsigned char *p = code_begin;
-    int count, i;
     x86_insn_reader_t rd;
     x86_insn_spec_t spec;
+    int i;
 
     /* Clear instruction. */
     memset(insn, 0, sizeof(x86_insn_t));
@@ -1074,13 +1100,7 @@ int x86_decode(
     init_reader(&rd, code_begin, code_end);
 
     /* Decode prefixes. */
-    count = decode_prefix(p, insn, opt);
-    if (count < 0)
-        return -1;
-    p += count;
-    rd.opcode += count;
-    rd.modrm += count;
-    rd.end += count;
+    insn->pfx = decode_prefix(&rd, opt);
 
     /* Decode the opcode and get encoding specification. */
     spec = decode_opcode(&rd, CPU_SIZE(opt));
@@ -1095,7 +1115,7 @@ int x86_decode(
         if (opr_spec == 0) /* no more operands */
             break;
 
-        if (!decode_operand(&insn->oprs[i], &rd, opr_spec, opt)) /* failed */
+        if (!decode_operand(&insn->oprs[i], &rd, opr_spec, insn->pfx, opt)) /* failed */
             return -1;
     }
 

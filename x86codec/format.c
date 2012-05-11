@@ -192,14 +192,14 @@ format_imm(uint32_t imm, char *p, x86_fmt_t fmt)
     }
 
     /* Prepend with 0 if the first nibble is alpha. */
-    if ((imm >> i) & 8)
+    if (((imm >> i) & 0xf) >= 10)
         *p++ = '0';
 
     /* Format each hexidecimal nibble. */
     for (; i >= 0; i -= 4)
     {
         int d = (imm >> i) & 0xf;
-        *p++ = (d < 10)? ('0' + d) : ('a' + d - 10);
+        *p++ = (d < 10)? ('0' + d) : ('A' + d - 10);
     }
 
     /* Append hexidecimal mark. */
@@ -223,43 +223,73 @@ format_reg(x86_reg_t reg, char *p, x86_fmt_t fmt)
     return copy_string_and_change_case(getRegString(reg), p, fmt);
 }
 
+/* Formats a memory operand in the following form:
+ * dword ptr es:[ax+si*4+10]
+ */
 static char *
 format_mem(const x86_opr_t *opr, char *p, x86_fmt_t fmt)
 {
     const char *prefix = 
-        (opr->size == OPR_8BIT)? "byte" :
-        (opr->size == OPR_16BIT)? "word" :
-        (opr->size == OPR_32BIT)? "dword" :
-        (opr->size == OPR_64BIT)? "qword" :
-        (opr->size == OPR_128BIT)? "dqword" : "";
+        (opr->size == OPR_8BIT)? "BYTE" :
+        (opr->size == OPR_16BIT)? "WORD" :
+        (opr->size == OPR_32BIT)? "DWORD" :
+        (opr->size == OPR_64BIT)? "QWORD" :
+        (opr->size == OPR_128BIT)? "DQWORD" : "";
     const x86_mem_t *mem = &opr->val.mem;
 
     p = copy_string_and_change_case(prefix, p, fmt);
     p = copy_string_and_change_case(" PTR ", p, fmt);
-    p = copy_string_and_change_case(getRegString(mem->segment), p, fmt);
-    *p++ = ':';
+    if (mem->segment)
+    {
+        p = copy_string_and_change_case(getRegString(mem->segment), p, fmt);
+        *p++ = ':';
+    }
     *p++ = '[';
-    if (mem->base)
+    if (mem->base == R_NONE) /* only displacement */
+    {
+        p = format_imm(mem->displacement, p, fmt);
+    }
+    else
     {
         p = copy_string_and_change_case(getRegString(mem->base), p, fmt);
         if (mem->index)
         {
             *p++ = '+';
             p = copy_string_and_change_case(getRegString(mem->index), p, fmt);
-            if (mem->scaling)
+            if (mem->scaling > 1)
             {
                 *p++ = '*';
                 p = format_imm(mem->scaling, p, fmt);
             }
         }
-    }
-    if (mem->displacement || mem->base == R_NONE)
-    {
-        if (mem->base)
+        if (mem->displacement > 0) /* e.g. [BX+1] */
+        {
             *p++ = '+';
-        p = format_imm(mem->displacement, p, fmt);
+            p = format_imm(mem->displacement, p, fmt);
+        }
+        else if (mem->displacement < 0) /* e.g. [BP-2] */
+        {
+            *p++ = '-';
+            p = format_imm(-mem->displacement, p, fmt);
+        }
     }
     *p++ = ']';
+    return p;
+}
+
+static char *
+format_ptr(const x86_opr_t *opr, char *p, x86_fmt_t fmt)
+{
+    sprintf(p, "%04X", opr->val.ptr.seg);
+    p += 4;
+    *p++ = ':';
+
+    if (opr->size == OPR_32BIT)
+    {
+        sprintf(p, "%04X", (uint16_t)opr->val.ptr.off);
+        p += 4;
+    }
+    
     return p;
 }
 
@@ -276,6 +306,8 @@ format_operand(const x86_opr_t *opr, char *p, x86_fmt_t fmt)
         return format_imm(opr->val.imm, p, fmt);
     case OPR_REL:
         return format_rel(opr->val.rel, p, fmt);
+    case OPR_PTR:
+        return format_ptr(opr, p, fmt);
     default:
         return p;
     }

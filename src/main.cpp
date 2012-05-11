@@ -190,7 +190,7 @@ int main(int argc, char* argv[])
     // Decode from a specific address.
 #if 0
     size_t start = 0x7430; // This is program entry
-#elif 1
+#elif 0
     size_t start = 0x3770; // near a jump table
 #else
     size_t start = 0x17fc; // This is proc OutputDecodedPage
@@ -200,7 +200,7 @@ int main(int argc, char* argv[])
     opt.mode = OPR_16BIT;
     const unsigned char *code = (const unsigned char *)reader.image_address();
     const unsigned char *p = code + start;
-    for ( ; p < code + total; )
+    for ( ; p < code + /* total */ 0x1900; )
     {
         x86_insn_t insn;
         int count = x86_decode(p, code + total, &insn, &opt);

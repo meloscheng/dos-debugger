@@ -18,11 +18,11 @@ typedef uint16_t x86_reg_t;
 /* Represents a memory address. */
 typedef struct x86_mem_t
 {
-    x86_reg_t segment;
-    x86_reg_t base;
-    x86_reg_t index;
-    uint16_t scaling;
-    uint32_t displacement; 
+    x86_reg_t segment;      /* segment register; 0 for default segment */
+    x86_reg_t base;         /* base register; 0 if not used */
+    x86_reg_t index;        /* index register; 0 if not used */
+    uint16_t  scaling;      /* scaling factor; must be one of 1, 2, 4 */
+    int32_t   displacement; /* displacement (sign-extended) */
 } x86_mem_t;
 
 /* Represents an immediate. */
@@ -31,6 +31,13 @@ typedef uint32_t x86_imm_t;
 /* Represents a relative offset to EIP. */
 typedef int32_t x86_rel_t;
 
+/* Represents a far pointer. */
+typedef struct x86_ptr_t
+{
+    uint16_t seg;   /* segment */
+    uint64_t off;   /* offset within segment */
+} x86_ptr_t;
+
 /* Enumerated values for the type of an operand. */
 enum x86_opr_type
 {
@@ -38,7 +45,8 @@ enum x86_opr_type
     OPR_REG     = 1,    /* the operand refers to a register */
     OPR_MEM     = 2,    /* the operand refers to a memory location */
     OPR_IMM     = 3,    /* the operand is an immediate */
-    OPR_REL     = 4     /* the operand is an (signed) offset to EIP */
+    OPR_REL     = 4,    /* the operand is an (signed) offset to EIP */
+    OPR_PTR     = 5     /* the operand is a far pointer (seg:off) */
 };
 
 /* Enumerated values for the size of an operand. */
@@ -67,6 +75,7 @@ typedef struct x86_opr_t
         x86_mem_t mem;
         x86_imm_t imm;
         x86_rel_t rel;
+        x86_ptr_t ptr;
     } val;              /* value */
 } x86_opr_t;
 
@@ -412,44 +421,49 @@ enum x86_condition
     C_NLE = 15, C_G   = C_NLE
 };
 
-/**
- * Enumerated values of instruction prefixes. Zero, one, or more than one
- * prefixes may be specified for an instruction. A prefix, if present, 
- * modifies the meaning of the instruction. There are four groups of prefixes.
- * Only one prefix from each group may be present in an instruction.
+/* Represents the set of prefixes in an instruction. */
+typedef uint16_t x86_insn_prefix_t;
+
+/*
+ * Logical constants for instruction prefixes. Every constant takes a 
+ * different bit, so that it's easy to test the presence of a given prefix.
+ * Note that more than one prefixes may share the same bit, and the actual
+ * prefix that should be used depends on the instruction context.
  */
-#if 0
+#if 1
 enum x86_insn_prefix
 {
     PFX_NONE  = 0,
 
     /* Group 1: lock and repeat prefixes */
-    PFX_LOCK  = 1, /* F0 */
-    PFX_REPNZ = 2, /* F2 */
-    PFX_REPNE = PFX_REPNZ,
-    PFX_REP   = 3, /* F3 */
-    PFX_REPZ  = PFX_REP,
-    PFX_REPE  = PFX_REPZ,
+    PFX_GROUP1  = 0x07,
+    PFX_LOCK    = 0x01,         /* F0 */
+    PFX_REPNZ   = 0x02,         /* F2 */
+    PFX_REPNE   = PFX_REPNZ,
+    PFX_REP     = 0x04,         /* F3 */
+    PFX_REPZ    = PFX_REP,
+    PFX_REPE    = PFX_REPZ,
 
     /* Group 2: segment override or branch hints */
-    PFX_ES      = 0x10, /* 26 */
-    PFX_CS      = 0x20, /* 2E */
-    PFX_SS      = 0x30, /* 36 */
-    PFX_DS      = 0x40, /* 3E */
-    PFX_FS      = 0x50, /* 64 */
-    PFX_GS      = 0x60, /* 65 */
-    PFX_BRANCH_TAKEN        = 0x20, /* 2E */
-    PFX_BRANCH_NOT_TAKEN    = 0x40, /* 3E */
+    PFX_GROUP2  = 0x01f8,
+    PFX_ES      = 0x0008,       /* 26 */
+    PFX_CS      = 0x0010,       /* 2E */
+    PFX_SS      = 0x0020,       /* 36 */
+    PFX_DS      = 0x0040,       /* 3E */
+    PFX_FS      = 0x0080,       /* 64 */
+    PFX_GS      = 0x0100,       /* 65 */
+    PFX_BRANCH_TAKEN     = PFX_CS, /* 2E */
+    PFX_BRANCH_NOT_TAKEN = PFX_DS, /* 3E */
 
     /* Group 3: operand-size override */
-    PFX_OPERAND_SIZE = 0x100, /* 66 */
+    PFX_OPERAND_SIZE = 0x0200,  /* 66 */
     
     /* Group 4: address-size override */
-    PFX_ADDRESS_SIZE = 0x1000 /* 67 */
+    PFX_ADDRESS_SIZE = 0x0400   /* 67 */
 };
 
-#define PFX_GROUP(pfx, grp) ((pfx) & (0xf << (((grp)-1)*4)))
 #else
+#define PFX_GROUP(pfx, grp) ((pfx) & (0xf << (((grp)-1)*4)))
 enum x86_insn_prefix
 {
     /* Group 1: lock and repeat prefixes */
@@ -503,9 +517,8 @@ enum x86_insn_mnemonic
  */
 typedef struct x86_insn_t
 {
-    unsigned char prefix[5]; /* instruction prefix from each group */
-    /* enum x86_insn_prefix   prefix;  /* instruction prefix */
-    enum x86_insn_mnemonic op;      /* instruction mnemonic */
+    x86_insn_prefix_t pfx;  /* instruction prefix */
+    enum x86_insn_mnemonic op;   /* instruction mnemonic */
     x86_opr_t oprs[MAX_OPERANDS]; /* at most 4 operands */
 } x86_insn_t;
 
