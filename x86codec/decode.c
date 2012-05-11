@@ -949,6 +949,41 @@ static int decode_operand(
     /* Decode regular operands. */
     switch (spec)
     {
+    case O_Ap: /* No ModR/M byte; address encoded in imm in the form of
+                * seg:ptr */
+        if (cpu_size == OPR_16BIT)
+        {
+            uint16_t off = read_word(rd);
+            uint16_t seg = read_word(rd);
+            fill_ptr(opr, OPR_32BIT, seg, off);
+        }
+        else
+        {
+            return 0;
+        }
+        break;
+
+    case O_Eb:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is byte.
+         */
+        return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size, pfx);
+
+    case O_Ev:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is the native word size of the CPU.
+         */
+        return decode_memory_operand(opr, rd, cpu_size, R_TYPE_GENERAL, cpu_size, pfx);
+
+    case O_Ew:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is word.
+         */
+        return decode_memory_operand(opr, rd, OPR_16BIT, R_TYPE_GENERAL, cpu_size, pfx);
+
     case O_Gb:
         /* REG(modrm) selects byte-size GPR. */
         /* TBD: check AH-DH */
@@ -979,27 +1014,6 @@ static int decode_operand(
         FILL_REG(opr, reg);
         break;
 
-    case O_Eb:
-        /* The operand is either a general-purpose register or a memory
-         * address, encoded by ModR/M + SIB + displacement. The size of 
-         * the operand is byte.
-         */
-        return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size, pfx);
-
-    case O_Ev:
-        /* The operand is either a general-purpose register or a memory
-         * address, encoded by ModR/M + SIB + displacement. The size of 
-         * the operand is the native word size of the CPU.
-         */
-        return decode_memory_operand(opr, rd, cpu_size, R_TYPE_GENERAL, cpu_size, pfx);
-
-    case O_Ew:
-        /* The operand is either a general-purpose register or a memory
-         * address, encoded by ModR/M + SIB + displacement. The size of 
-         * the operand is word.
-         */
-        return decode_memory_operand(opr, rd, OPR_16BIT, R_TYPE_GENERAL, cpu_size, pfx);
-
     case O_Ib: /* byte immediate */
         FILL_IMM(opr, OPR_8BIT, read_byte(rd));
         break;
@@ -1029,12 +1043,14 @@ static int decode_operand(
         else
             FILL_REL(opr, OPR_32BIT, read_dword(rd));
         break;
-
-    case O_Sw: /* REG(modrm) selects segment register */
-        modrm = read_modrm(rd);
-        reg = REG_MAKE(R_TYPE_SEGMENT, REG(modrm), OPR_16BIT, 0);
-        FILL_REG(opr, reg);
-        break;
+        
+    case O_Mp: /* ModR/M refers to memory containing far pointer seg:ptr
+                * of 32, 48, or 80 bits.
+                */
+        if (cpu_size == OPR_16BIT)
+            return decode_memory_operand(opr, rd, OPR_32BIT, 0, cpu_size, pfx);
+        else
+            return 0;
 
     case O_Ob: /* no ModR/M byte; absolute memory address in disp as
                 * 16-bit or 32-bit near ptr
@@ -1054,27 +1070,27 @@ static int decode_operand(
         else
             FILL_MEM(opr, cpu_size, R_DS, R_NONE, R_NONE, 1, read_dword(rd));
         break;
+        
+    case O_Sw: /* REG(modrm) selects segment register */
+        modrm = read_modrm(rd);
+        reg = REG_MAKE(R_TYPE_SEGMENT, REG(modrm), OPR_16BIT, 0);
+        FILL_REG(opr, reg);
+        break;
 
-    case O_Mp: /* ModR/M refers to memory containing far pointer seg:ptr
-                * of 32, 48, or 80 bits.
-                */
-        if (cpu_size == OPR_16BIT)
-            return decode_memory_operand(opr, rd, OPR_32BIT, 0, cpu_size, pfx);
-        else
-            return 0;
+    case O_Xb: /* memory addressed by DS:rSI; byte */
+        FILL_MEM(opr, OPR_8BIT, R_DS, REG_RESIZE(R_SI, cpu_size), 0, 1, 0);
+        break;
 
-    case O_Ap: /* No ModR/M byte; address encoded in imm in the form of
-                * seg:ptr */
-        if (cpu_size == OPR_16BIT)
-        {
-            uint16_t off = read_word(rd);
-            uint16_t seg = read_word(rd);
-            fill_ptr(opr, OPR_32BIT, seg, off);
-        }
-        else
-        {
-            return 0;
-        }
+    case O_Xv: /* memory addressed by DS:rSI; native */
+        FILL_MEM(opr, cpu_size, R_DS, REG_RESIZE(R_SI, cpu_size), 0, 1, 0);
+        break;
+
+    case O_Yb: /* memory addressed by ES:rDI; byte */
+        FILL_MEM(opr, OPR_8BIT, R_ES, REG_RESIZE(R_DI, cpu_size), 0, 1, 0);
+        break;
+
+    case O_Yv: /* memory addressed by ES:rDI; native */
+        FILL_MEM(opr, cpu_size, R_ES, REG_RESIZE(R_DI, cpu_size), 0, 1, 0);
         break;
 
     default:

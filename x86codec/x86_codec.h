@@ -245,6 +245,10 @@ enum x86_register_number
 /* Gets the number of a register (as enum x86_register_number). */
 #define REG_NUMBER(reg) ((reg) & 0xf)
 
+/* Convert a register to a different size. */
+#define REG_RESIZE(reg, newsize) \
+    REG_MAKE(REG_TYPE(reg), REG_NUMBER(reg), (newsize), REG_OFFSET(reg))
+
 /** Enumerated values of x86 register identifiers. */
 enum x86_register
 {

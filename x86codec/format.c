@@ -316,10 +316,24 @@ format_operand(const x86_opr_t *opr, char *p, x86_fmt_t fmt)
 void x86_format(const x86_insn_t *insn, char buffer[256], x86_fmt_t fmt)
 {
     const int N = sizeof(insn_str) / sizeof(insn_str[0]);
-    char *p;
+    char *p = buffer;
     int i;
 
     buffer[0] = 0;
+
+    /* Format prefix. */
+    if (insn->pfx & PFX_GROUP1)
+    {
+        const char *s = 0;
+        switch (insn->pfx & PFX_GROUP1)
+        {
+        case PFX_LOCK:  s = "LOCK ";  break;
+        case PFX_REPNZ: s = "REPNZ "; break;
+        case PFX_REP:   s = "REP ";   break;
+        }
+        if (s)
+            p = copy_string_and_change_case(s, p, fmt);
+    }
 
     /* Format mnemonic. */
     if (!(insn->op >= 0 && insn->op < N))
@@ -329,7 +343,7 @@ void x86_format(const x86_insn_t *insn, char buffer[256], x86_fmt_t fmt)
     }
 
     /* Turn to lower case if necessary. */
-    p = copy_string_and_change_case(insn_str[insn->op], buffer, fmt);
+    p = copy_string_and_change_case(insn_str[insn->op], p, fmt);
 
     /* Format operands. */
     for (i = 0; i < MAX_OPERANDS; i++)

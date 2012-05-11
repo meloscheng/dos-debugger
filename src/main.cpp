@@ -188,10 +188,13 @@ int main(int argc, char* argv[])
 	// std::cout << "Image size: " << reader.image_size() << std::endl;
 
     // Decode from a specific address.
-#if 0
+#if 1
     size_t start = 0x7430; // This is program entry
 #elif 0
-    size_t start = 0x3770; // near a jump table
+    size_t start = 0x0010; // first instruction
+#elif 1
+    //size_t start = 0x3770; // near a jump table
+    size_t start = 0x37B4; // after jump table
 #else
     size_t start = 0x17fc; // This is proc OutputDecodedPage
 #endif
@@ -200,7 +203,7 @@ int main(int argc, char* argv[])
     opt.mode = OPR_16BIT;
     const unsigned char *code = (const unsigned char *)reader.image_address();
     const unsigned char *p = code + start;
-    for ( ; p < code + /* total */ 0x1900; )
+    for ( ; p < code + total; )
     {
         x86_insn_t insn;
         int count = x86_decode(p, code + total, &insn, &opt);
