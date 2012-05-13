@@ -2,8 +2,16 @@
 
 #include "mz.h"
 #include "cpr/file_mapping.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
+
+/* Relocation entry in a DOS MZ executable. */
+typedef struct mz_reloc_t
+{
+	uint16_t off;
+	uint16_t seg;
+} mz_reloc_t;
 
 struct mz_file_t
 {
@@ -14,10 +22,17 @@ struct mz_file_t
     unsigned char *pmem;    /* pointer to memory mapped file */
 };
 
+static uint16_t read_word(const unsigned char *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
 mz_file_t *mz_open(const char *filename)
 {
     mz_file_t *file;
     size_t used_size;
+    int i;
+    const unsigned char *image;
 
 #define REQUIRE(cond) \
     do { \
@@ -54,11 +69,23 @@ mz_file_t *mz_open(const char *filename)
     REQUIRE(used_size <= file->size);
     file->size = used_size;
 
-    /* Load relocation table. */
-
     /* Check header size. */
     file->start = (size_t)file->header.header_size * 16;
     REQUIRE(file->start <= file->size);
+
+    /* Load relocation table. */
+    REQUIRE((size_t)file->header.reloc_off + 
+        (size_t)file->header.reloc_count * 4 <= file->start);
+    image = file->pmem + file->start;
+    for (i = 0; i < file->header.reloc_count; i++)
+    {
+        mz_reloc_t ent;
+        size_t off;
+        memcpy(&ent, file->pmem + file->header.reloc_off + i * 4, 4);
+        off = (size_t)ent.off + (size_t)ent.seg * 16;
+
+        /* printf("[%04X:%04X] %04X\n", ent.seg, ent.off, read_word(image + off)); */
+    }
 
     /* Return loaded file. */
     return file;
@@ -85,4 +112,21 @@ unsigned char *mz_image_address(mz_file_t *file)
 size_t mz_image_size(const mz_file_t *file)
 {
     return file->size - file->start;
+}
+
+/* Gets the number of relocation entries. */
+size_t mz_reloc_count(const mz_file_t *file)
+{
+    return file->header.reloc_count;
+}
+
+/* Gets the offset a relocation entry. The offset is relative to the start
+ * of the executable image. The module loader should add the loaded segment
+ * to the word at this location.
+ */
+size_t mz_reloc_entry(const mz_file_t *file, size_t i)
+{
+    mz_reloc_t ent;
+    memcpy(&ent, file->pmem + file->header.reloc_off + i * 4, 4);
+    return (size_t)ent.off + (size_t)ent.seg * 16;
 }

@@ -29,5 +29,8 @@
     <ClInclude Include="src\mz.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\disassembler.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -1108,6 +1108,7 @@ int x86_decode(
     x86_insn_reader_t rd;
     x86_insn_spec_t spec;
     int i;
+    int count;
 
     /* Clear instruction. */
     memset(insn, 0, sizeof(x86_insn_t));
@@ -1135,6 +1136,11 @@ int x86_decode(
             return -1;
     }
 
-    /* Returns the number of bytes consumed. */
-    return (rd.end - rd.prefix);
+    /* Compute the number of bytes consumed, and check that it does not
+     * overflow the supplied buffer. */
+    count = rd.end - rd.prefix;
+    if (count > code_end - code_begin)
+        return -1;
+    else
+        return count;
 }

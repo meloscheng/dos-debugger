@@ -81,6 +81,8 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
+    
+
 	// std::cout << "Image size: " << reader.image_size() << std::endl;
 
     // Decode from a specific address.

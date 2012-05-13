@@ -9,15 +9,6 @@
 extern "C" {
 #endif
 
-#if 0
-/* Relocation entry in a DOS MZ executable. */
-typedef struct MZRelocEntry
-{
-	uint16_t off;
-	uint16_t seg;
-} MZRelocEntry;
-#endif
-
 /* File header in a DOS MZ executable. */
 typedef struct mz_header_t
 {
@@ -43,10 +34,26 @@ typedef struct mz_header_t
 struct mz_file_t;
 typedef struct mz_file_t mz_file_t;
 
+/* Opens a DOS MZ executable file. */
 mz_file_t *mz_open(const char *filename);
+
+/* Closes a DOS MZ executable file. */
 void mz_close(mz_file_t *file);
+
+/* Gets a pointer to the executable image. */
 unsigned char *mz_image_address(mz_file_t *file);
+
+/* Gets the size, in bytes, of the executable image. */
 size_t mz_image_size(const mz_file_t *file);
+
+/* Gets the number of relocation entries. */
+size_t mz_reloc_count(const mz_file_t *file);
+
+/* Gets the offset a relocation entry. The offset is relative to the start
+ * of the executable image. The module loader should add the loaded segment
+ * to the word at this location.
+ */
+size_t mz_reloc_entry(const mz_file_t *file, size_t i);
 
 #ifdef __cplusplus
 }
