@@ -5,6 +5,7 @@
 
 #include "x86codec/x86_codec.h"
 #include "mz.h"
+#include "disassembler.h"
 
 static void hex_dump(const void *_p, size_t size)
 {
@@ -22,39 +23,59 @@ static void hex_dump(const void *_p, size_t size)
 	std::cout << std::endl;
 }
 
-#if 0
-// Test x86 disassembler.
-static void test_decode()
+static void test_decode(const unsigned char *image, size_t size, size_t start)
 {
-    unsigned char code[] = {
-        0x03, 0x05, 0x00, 0x00, 0x00, 0x00 // ADD EAX, dword ptr [0]
-    };
-    
-    x86_insn_t insn;
+    const unsigned char *p = image + start;
     x86_options_t opt;
     opt.mode = OPR_16BIT;
     
-    int count = x86_decode(code, &code[6], &insn, &opt);
-    if (count <= 0)
+    for ( ; p < image + size; )
     {
-        std::cerr << "Invalid instruction!" << std::endl;
-        return;
-    }
-    
-    // Display the string.
-    char text[256];
-    x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
-    std::cout << text << std::endl;
+        x86_insn_t insn;
+        int count = x86_decode(p, image + size, &insn, &opt);
+        if (count <= 0)
+        {
+            fprintf(stderr, "%s\n", "Invalid instruction.");
 #if 0
-    if (count != sizeof(code))
-    {
-        std::cerr << "Decode wrong!" << std::endl;
-        return;
+            __debugbreak();
+            continue;
+#else
+            break;
+#endif
+        }
+
+        /* Output address. */
+        printf("0000:%04X  ", (unsigned int)(p - image));
+
+        /* Output binary code. */
+        for (int i = 0; i < 8; i++)
+        {
+            if (i < count)
+                printf("%02x ", p[i]);
+            else
+                printf("   ");
+        }
+
+        char text[256];
+        x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
+        std::cout << text << std::endl;
+        if (text[0] == '*')
+            __debugbreak();
+        else
+            p += count;
     }
-#endif
-    std::cout << "Finished." << std::endl;
 }
-#endif
+
+static void test_dasm(const unsigned char *image, size_t size, size_t offset)
+{
+    x86_dasm_t *d;
+    dasm_farptr_t start;
+    start.seg = 0;
+    start.off = offset;
+
+    d = dasm_create(image, size);
+    dasm_analyze(d, start);
+}
 
 int main(int argc, char* argv[])
 {
@@ -66,11 +87,6 @@ int main(int argc, char* argv[])
 	}
 #endif
 
-#if 0
-    test_decode();
-    return 0;
-#endif
-
 	const char *filename = "data/H.EXE";
 
     /* Open the .EXE file. */
@@ -80,9 +96,6 @@ int main(int argc, char* argv[])
 		std::cerr << "The file format is not supported." << std::endl;
 		return 1;
 	}
-
-    
-
 	// std::cout << "Image size: " << reader.image_size() << std::endl;
 
     // Decode from a specific address.
@@ -96,48 +109,14 @@ int main(int argc, char* argv[])
 #else
     size_t start = 0x17fc; // This is proc OutputDecodedPage
 #endif
-    size_t total = mz_image_size(file);
-    x86_options_t opt;
-    opt.mode = OPR_16BIT;
-    const unsigned char *code = mz_image_address(file);
-    const unsigned char *p = code + start;
-    for ( ; p < code + total; )
-    {
-        x86_insn_t insn;
-        int count = x86_decode(p, code + total, &insn, &opt);
-        if (count <= 0)
-        {
-            std::cout << "Invalid instruction." << std::endl;
+
 #if 0
-            __debugbreak();
-            continue;
+    // Decode instructions in serial from the starting position.
+    test_decode(mz_image_address(file), mz_image_size(file), start);
 #else
-            break;
+    // Disassemble the executable from a starting address.
+    test_dasm(mz_image_address(file), mz_image_size(file), start);
 #endif
-        }
-
-        /* Output address. */
-        printf("0000:%04X  ", (unsigned int)(p - code));
-
-        /* Output binary code. */
-        for (int i = 0; i < 8; i++)
-        {
-            if (i < count)
-                printf("%02x ", p[i]);
-            else
-            {
-                std::cout << "   ";
-            }
-        }
-
-        char text[256];
-        x86_format(&insn, text, X86_FMT_INTEL|X86_FMT_LOWER);
-        std::cout << text << std::endl;
-        if (text[0] == '*')
-            __debugbreak();
-        else
-            p += count;
-    }
 
 	// Produce a hex-dump of the first few bytes of the image.
 	// hex_dump(reader.image_address(), std::min(reader.image_size(), (size_t)256));

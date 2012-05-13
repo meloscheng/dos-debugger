@@ -1034,14 +1034,14 @@ static int decode_operand(
         break;
 
     case O_Jb: /* immediate encodes relative offset (byte) */
-        FILL_REL(opr, OPR_8BIT, read_byte(rd));
+        FILL_REL(opr, OPR_8BIT, (int8_t)read_byte(rd));
         break;
 
     case O_Jz: /* immediate encodes relative offset (word or dword) */
         if (cpu_size == OPR_16BIT)
-            FILL_REL(opr, OPR_16BIT, read_word(rd));
+            FILL_REL(opr, OPR_16BIT, (int16_t)read_word(rd));
         else
-            FILL_REL(opr, OPR_32BIT, read_dword(rd));
+            FILL_REL(opr, OPR_32BIT, (int32_t)read_dword(rd));
         break;
         
     case O_Mp: /* ModR/M refers to memory containing far pointer seg:ptr

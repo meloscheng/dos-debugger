@@ -6,6 +6,8 @@
 
 #define MAX2(a,b) ((a) > (b) ? (a) : (b))
 
+#define FARPTR_TO_OFFSET(p) (((uint32_t)(p).seg << 4) | (uint32_t)(p).off)
+
 #define VECTOR_STRUCT(Ty)   \
     struct {                \
         size_t elemsize;    \
@@ -32,8 +34,14 @@ typedef VECTOR_STRUCT(void) VECTOR_VOID_STRUCT;
         } \
     } while (0)
 
+/* Returns a reference to the i-th element in the vector. */
+#define VECTOR_AT(v, i) ((v)->p[i])
+
 /* Returns a boolean value indicating whether the vector is empty. */
 #define VECTOR_EMPTY(v) ((v)->count == 0)
+
+/* Returns the number of elements in a vector. */
+#define VECTOR_SIZE(v) ((v)->count)
 
 /* Reserves at least _cap_ elements in the vector, and returns a pointer
  * to the (possibly reallocated) underlying buffer.
@@ -86,11 +94,50 @@ typedef unsigned char byte_attr_t;
 
 static byte_attr_t attr[0x1000000]; /* 1MB bytes */
 
+enum dasm_entry_type
+{
+    ENTRY_USER_SPECIFIED        = 0,
+    ENTRY_FUNCTION_CALL         = 1,
+    ENTRY_CONDITIONAL_JUMP      = 2,
+    ENTRY_UNCONDITIONAL_JUMP    = 3,
+    ENTRY_RETURN_FROM_CALL      = 4,
+    ENTRY_RETURN_FROM_INTERRUPT = 5,
+    ENTRY_JUMP_TABLE            = 6
+};
+
+static const char *get_entry_type_string(enum dasm_entry_type type)
+{
+#define CASE(x) case x : return #x 
+    switch (type)
+    {
+        CASE(ENTRY_USER_SPECIFIED);
+        CASE(ENTRY_FUNCTION_CALL);
+        CASE(ENTRY_CONDITIONAL_JUMP);
+        CASE(ENTRY_UNCONDITIONAL_JUMP);
+        CASE(ENTRY_RETURN_FROM_CALL);
+        CASE(ENTRY_RETURN_FROM_INTERRUPT);
+        CASE(ENTRY_JUMP_TABLE);
+    default:
+        return "ENTRY_UNKNOWN";
+    }
+#undef CASE
+}
+
+typedef uint32_t dasm_off_t;
+
+typedef struct dasm_entry_t
+{
+    x86_farptr16_t start;           /* address of the entry point */
+    enum dasm_entry_type reason;    /* why is this byte an entry point */
+    x86_farptr16_t from;            /* where is it from */
+} dasm_entry_t;
+
 /* Represents an X86 disassembler. */
 typedef struct x86_dasm_t
 {
     const unsigned char *image;
     size_t image_size;
+    VECTOR(dasm_entry_t) entry_points;
 } x86_dasm_t;
 
 x86_dasm_t * dasm_create(const unsigned char *image, size_t size)
@@ -101,12 +148,17 @@ x86_dasm_t * dasm_create(const unsigned char *image, size_t size)
         return NULL;
     d->image = image;
     d->image_size = size;
+    VECTOR_CREATE(d->entry_points, dasm_entry_t);
     return d;
 }
 
 void dasm_destroy(x86_dasm_t *d)
 {
-    free(d);
+    if (d)
+    {
+        VECTOR_DESTROY(d->entry_points);
+        free(d);
+    }
 }
 
 #define ST_OK                0
@@ -131,9 +183,9 @@ void dasm_destroy(x86_dasm_t *d)
  *      analyzed as code. However, the byte itself is not previously analyzed
  *      to be the start of an instruction.
  */
-int decode_instruction(x86_dasm_t *d, size_t start, x86_insn_t *insn)
+int decode_instruction(x86_dasm_t *d, dasm_farptr_t start, x86_insn_t *insn)
 {
-    size_t b = start;
+    size_t b = FARPTR_TO_OFFSET(start);
     int count, i;
     x86_options_t opt = { OPR_16BIT };
 
@@ -156,7 +208,7 @@ int decode_instruction(x86_dasm_t *d, size_t start, x86_insn_t *insn)
     }
 
     /* Decode an instruction at this location. */
-    count = x86_decode(d->image + start, d->image + d->image_size, insn, &opt);
+    count = x86_decode(d->image + b, d->image + d->image_size, insn, &opt);
     if (count <= 0)
         return ST_BAD_INSTRUCTION;
 
@@ -177,18 +229,23 @@ int decode_instruction(x86_dasm_t *d, size_t start, x86_insn_t *insn)
     {
         attr[b + i] &= ~ATTR_TYPE;
         attr[b + i] |= TYPE_CODE;
+        attr[b + i] &= ~ATTR_BOUNDARY;
     }
+    attr[b] |= ATTR_BOUNDARY;
             
     /* Return the number of bytes consumed. */
     return count;
 }
 
+#define FLOW_WRAPPED        -2
+#define FLOW_FAILED         -1
 #define FLOW_CONTINUE       0
 #define FLOW_FINISH_BLOCK   1   
 
 /* Analyze an instruction decoded from offset _start_ for _count_ bytes.
+ * TBD: address wrapping if IP is above 0xFFFF is not handled. It should be.
  */
-int analyze_flow_instruction(x86_dasm_t *d, size_t start, size_t count, x86_insn_t *insn)
+int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x86_insn_t *insn)
 {
     int op = insn->op;
 
@@ -197,8 +254,25 @@ int analyze_flow_instruction(x86_dasm_t *d, size_t start, size_t count, x86_insn
      */
     if (op == I_JMP)
     {
-        /* printf("About to JMP: \n"); */
-        /* push to queue */
+        if (insn->oprs[0].type == OPR_REL) /* jump to relative position */
+        {
+            dasm_entry_t target;
+            target.start.seg = start.seg;
+            target.start.off = start.off + count + insn->oprs[0].val.rel;
+            target.reason = ENTRY_UNCONDITIONAL_JUMP;
+            target.from = start;
+            VECTOR_PUSH(d->entry_points, target);
+            return FLOW_FINISH_BLOCK;
+        }
+        else
+        {
+            return FLOW_FAILED;
+        }
+    }
+
+    /* If this is a RET instruction, finish the current block. */
+    if (op == I_RETN || op == I_RETF)
+    {
         return FLOW_FINISH_BLOCK;
     }
 
@@ -223,34 +297,72 @@ int analyze_flow_instruction(x86_dasm_t *d, size_t start, size_t count, x86_insn
      */
     switch (op)
     {
+    case I_JO:
+    case I_JNO:
+    case I_JB:
+    case I_JNB:
+    case I_JE:
+    case I_JNE:
+    case I_JBE:
     case I_JNBE:
-        /* push to queue */
-        return FLOW_CONTINUE;
+    case I_JS:
+    case I_JNS:
+    case I_JP:
+    case I_JNP:
+    case I_JL:
+    case I_JLE:
+    case I_JNLE:
+        if (insn->oprs[0].type == OPR_REL) /* jump to relative position */
+        {
+            dasm_entry_t target;
+            target.start.seg = start.seg;
+            target.start.off = start.off + count + insn->oprs[0].val.rel;
+            target.reason = ENTRY_CONDITIONAL_JUMP;
+            target.from = start;
+            VECTOR_PUSH(d->entry_points, target);
+            return FLOW_CONTINUE;
+        }
+        else
+        {
+            return FLOW_FAILED;
+        }
     }
 
     /* This is not a flow-control instruction, so continue as usual. */
     return FLOW_CONTINUE;
 }
 
-void dasm_analyze(x86_dasm_t *d, size_t start)
+void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
 {
-    /* Create a list of pending code entry points to analyze. At the 
+    /* Maintain a list of pending code entry points to analyze. At the 
      * beginning, there is only one entry point, which is _start_.
      * As we encounter branch instructions (JMP, CALL, or Jcc) on the way, 
      * we push the target addresses to the queue of entry points, so 
      * that they can be analyzed later.
      */
-    QUEUE(size_t) entry_points;
-    QUEUE_CREATE(entry_points, size_t);
-    QUEUE_PUSH(entry_points, start);
+    size_t i = VECTOR_SIZE(d->entry_points);
+
+    /* Create an entry point using the user-supplied starting offset. */
+    dasm_entry_t entry;
+    entry.start = start;
+    entry.reason = ENTRY_USER_SPECIFIED;
+    entry.from.seg = -1;
+    entry.from.off = -1;
+    VECTOR_PUSH(d->entry_points, entry);
 
     /* Initialize all bytes in the image to unknown status. */
     memset(attr, 0, d->image_size);
 
     /* Decode the instruction at p. */
-    while (!QUEUE_EMPTY(entry_points))
+    for ( ; i < VECTOR_SIZE(d->entry_points); i++)
     {
-        size_t pos = QUEUE_POP(entry_points);
+        dasm_farptr_t pos = VECTOR_AT(d->entry_points, i).start;
+        dasm_farptr_t from = VECTOR_AT(d->entry_points, i).from;
+
+        printf("%04X:%04X  ; -- %s FROM %04X:%04X --\n", 
+            pos.seg, pos.off, 
+            get_entry_type_string(VECTOR_AT(d->entry_points, i).reason),
+            from.seg, from.off);
 
         /* Keep decoding instructions starting from this location until
          * we encounter end-of-input, analyzed code/data, or any of the
@@ -260,12 +372,14 @@ void dasm_analyze(x86_dasm_t *d, size_t start)
         {
             x86_insn_t insn;
             int ret, count;
-            
+            char text[256];
+
             /* Decode an instruction at this location. */
             ret = decode_instruction(d, pos, &insn);
             if (ret == ST_ALREADY_ANALYZED)
             {
-                continue;
+                printf("Already analyzed.\n");
+                break;
             }
             if (ret == ST_UNEXPECTED_DATA)
             {
@@ -283,19 +397,32 @@ void dasm_analyze(x86_dasm_t *d, size_t start)
                 break;
             }
 
+            /* Debug only: display the instruction in assembly. */
+            x86_format(&insn, text, X86_FMT_LOWER|X86_FMT_INTEL);
+            printf("%04X:%04X  %s\n", pos.seg, pos.off, text);
+
             /* Analyse any flow-control instruction. */
             count = ret;
-            ret = analyze_flow_instruction(d, start, count, &insn);
+            ret = analyze_flow_instruction(d, pos, count, &insn);
             if (ret == FLOW_FINISH_BLOCK)
+            {
                 break;
+            }
+            if (ret == FLOW_FAILED)
+            {
+                printf("FAILED\n");
+                break;
+            }
 
-            /* Advance the byte pointer. */
-            pos += count;
+            /* Advance the byte pointer. Note: the IP may wrap around 0xFFFF 
+             * if pos.off + count > 0xFFFF. This is probably not intended but
+             * technically allowed. So we allow for this for the moment.
+             */
+            pos.off += count;
         }
-    }
 
-    /* Release data. */
-    QUEUE_DESTROY(entry_points);
+        printf("\n");
+    }
 
 #if 0
         /* Output address. */
