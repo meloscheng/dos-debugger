@@ -69,12 +69,61 @@ static void test_decode(const unsigned char *image, size_t size, size_t start)
 static void test_dasm(const unsigned char *image, size_t size, mz_farptr_t start)
 {
     x86_dasm_t *d;
+    x86_insn_t insn;
+    x86_options_t opts = { OPR_16BIT };
 
     d = dasm_create(image, size);
     dasm_analyze(d, start);
 
     fprintf(stderr, "\n-- Statistics --\n");
     dasm_stat(d);
+
+    // Linear listing of disassemblies.
+    bool last_is_instruction = false;
+    for (size_t i = 0; i < size; )
+    {
+        byte_attr_t attr = dasm_get_byte_attr(d, i);
+        if ((attr & ATTR_TYPE) == TYPE_CODE && (attr & ATTR_BOUNDARY))
+        {
+            int count = x86_decode(image + i, image + size, &insn, &opts);
+            if (count > 0)
+            {
+                char text[256];
+                x86_format(&insn, text, X86_FMT_LOWER|X86_FMT_INTEL);
+
+                // Try find xref to this instruction.
+                const dasm_xref_t *xref = dasm_enum_xrefs(d, i, NULL);
+                if (xref)
+                {
+                    char comment[256];
+                    sprintf(comment, "loc_%X:", i);
+                    printf("\n%-10s ; XRef:", comment);
+                    while (xref)
+                    {
+                        printf(" %04X:%04X", xref->source.seg, xref->source.off);
+                        xref = dasm_enum_xrefs(d, i, xref);
+                    }
+                    printf("\n");
+                }
+
+                printf("%04X:%04X  %s\n", 0, i, text);
+                i += count;
+            }
+            else
+            {
+                printf("CANNOT DECODE SUPPOSEDLY CODE!\n");
+                return;
+            }
+            last_is_instruction = true;
+        }
+        else
+        {
+            if (last_is_instruction)
+                printf("\n");
+            last_is_instruction = false;
+            i++;
+        }
+    }
 }
 
 int main(int argc, char* argv[])

@@ -835,9 +835,9 @@ static int decode_memory_operand(
         }
 
         /* Decode a direct memory address if MOD = (00) and RM = (110). */
-        if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16, sign-extended */
+        if (MOD(modrm) == 0 && RM(modrm) == 6) /* disp16, zero-extended */
         {
-            int16_t disp = read_word(rd);
+            uint16_t disp = read_word(rd);
             FILL_MEM(opr, opr_size, seg, 0, 0, 0, disp);
             return 1;
         }

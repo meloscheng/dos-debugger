@@ -3,145 +3,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <memory.h>
-
-#define MAX2(a,b) ((a) > (b) ? (a) : (b))
+#include "vector.h"
 
 #define FARPTR_TO_OFFSET(p) (((uint32_t)(p).seg << 4) + (uint32_t)(p).off)
 
-#define VECTOR_STRUCT(Ty)   \
-    struct {                \
-        size_t elemsize;    \
-        Ty *p;              \
-        size_t count;       \
-        size_t capacity;    \
-    }
-
-typedef VECTOR_STRUCT(void) VECTOR_VOID_STRUCT;
-
-#define VECTOR(Ty) VECTOR_STRUCT(Ty) *
-
-#define VECTOR_CREATE(v, Ty) \
-    do { \
-        (v) = calloc(1, sizeof(VECTOR_VOID_STRUCT)); \
-        (v)->elemsize = sizeof(Ty); \
-    } while (0)
-
-#define VECTOR_DESTROY(v) \
-    do { \
-        if (v) { \
-            free((v)->p); \
-            free(v); \
-        } \
-    } while (0)
-
-/* Returns a reference to the i-th element in the vector. */
-#define VECTOR_AT(v, i) ((v)->p[i])
-
-/* Returns a boolean value indicating whether the vector is empty. */
-#define VECTOR_EMPTY(v) ((v)->count == 0)
-
-/* Returns the number of elements in a vector. */
-#define VECTOR_SIZE(v) ((v)->count)
-
-/* Reserves at least _cap_ elements in the vector, and returns a pointer
- * to the (possibly reallocated) underlying buffer.
- */
-#define VECTOR_RESERVE(v,cap) \
-    ( \
-        ((cap) <= (v)->capacity) ? \
-            ((v)->p) : \
-            ((v)->p = realloc((v)->p, (v)->elemsize * ((v)->capacity = cap))) \
-    )
-
-/* Push an element to the end of the array. Returns an lvalue that refers to
- * the pushed element.
- */
-#define VECTOR_PUSH(v,elem) \
-    ( \
-        ( ((v)->count < (v)->capacity)? (v)->p : \
-              VECTOR_RESERVE(v, MAX2(10, (v)->capacity * 2)) \
-        ) [++(v)->count - 1] = (elem) \
-    )
-
-/* Pop an element from the end of the vector. Returns an lvalue to the element
- * originally stored at the end of the vector.
- */
-#define VECTOR_POP(v) ((v)->p[--(v)->count])
-
-#if 1
-#define QUEUE(Ty) VECTOR(Ty)
-//#define QUEUE_INIT(Ty) VECTOR_INIT(Ty)
-#define QUEUE_CREATE(q,Ty) VECTOR_CREATE(q,Ty)
-#define QUEUE_DESTROY(q) VECTOR_DESTROY(q)
-#define QUEUE_EMPTY(q) VECTOR_EMPTY(q)
-#define QUEUE_PUSH(q,elem) VECTOR_PUSH(q,elem)
-#define QUEUE_POP(q) VECTOR_POP(q)
-#endif
-
-typedef unsigned char byte_attr_t;
-
-#define ATTR_TYPE       3
-#define TYPE_UNKNOWN    0   /* the byte is not processed and its attribute is indeterminate */
-#define TYPE_PENDING    1   /* the byte is scheduled for analysis */
-#define TYPE_CODE       2   /* the byte is part of an instruction */
-#define TYPE_DATA       3   /* the byte is part of a data item */
-
-#define ATTR_PROCESSED  2   /* indicates that the byte is processed */
-
-#define ATTR_BOUNDARY   4   /* indicates that the byte is the first byte of
-                             * an instruction or data item.
-                             */
-
-enum dasm_entry_type
-{
-    ENTRY_USER_SPECIFIED        = 0,    /* user specified entry point (e.g. program start) */
-    ENTRY_FUNCTION_CALL         = 1,    /* a CALL instruction refers to this location */
-    ENTRY_CONDITIONAL_JUMP      = 2,    /* a Jcc instruction refers to this location */
-    ENTRY_UNCONDITIONAL_JUMP    = 3,    /* a JUMP instruction refers to this location */
-    ENTRY_INDIRECT_JUMP         = 4,    /* a JUMP instruction where the jump target address
-                                         * is given in a memory location (such as jump
-                                         * table).
-                                         */
-    ENTRY_RETURN_FROM_CALL      = 5,    
-    ENTRY_RETURN_FROM_INTERRUPT = 6,    
-#if 0
-    ENTRY_NEAR_JUMP_TABLE       = 7,    /* the word at this location appears to represent
-                                         * a relative offset to a JUMP NEAR instruction.
-                                         * The instruction is stored in _from_.
-                                         */
-    ENTRY_FAR_JUMP_TABLE        = 8,    /* the dword at this location appears to represent
-                                         * an absolute address (seg:ptr) of a JUMP FAR
-                                         * instruction.
-                                         */
-#endif
-};
-
-static const char *get_entry_type_string(enum dasm_entry_type type)
+const char * dasm_xref_type_string(dasm_xref_type type)
 {
 #define CASE(x) case x : return #x 
     switch (type)
     {
-        CASE(ENTRY_USER_SPECIFIED);
-        CASE(ENTRY_FUNCTION_CALL);
-        CASE(ENTRY_CONDITIONAL_JUMP);
-        CASE(ENTRY_UNCONDITIONAL_JUMP);
-        CASE(ENTRY_INDIRECT_JUMP);
-        CASE(ENTRY_RETURN_FROM_CALL);
-        CASE(ENTRY_RETURN_FROM_INTERRUPT);
+        CASE(XREF_USER_SPECIFIED);
+        CASE(XREF_FUNCTION_CALL);
+        CASE(XREF_CONDITIONAL_JUMP);
+        CASE(XREF_UNCONDITIONAL_JUMP);
+        CASE(XREF_INDIRECT_JUMP);
+        /* CASE(XREF_RETURN_FROM_CALL); */
+        /* CASE(XREF_RETURN_FROM_INTERRUPT); */
     default:
-        return "ENTRY_UNKNOWN";
+        return "XREF_UNKNOWN";
     }
 #undef CASE
 }
-
-typedef uint32_t dasm_off_t;
-
-typedef struct dasm_entry_t
-{
-    x86_farptr16_t start;           /* address of the entry point */
-    enum dasm_entry_type reason;    /* why is this byte an entry point */
-    x86_farptr16_t from;            /* where is it from */
-} dasm_entry_t;
 
 typedef struct dasm_jump_table_t
 {
@@ -156,10 +38,15 @@ typedef struct x86_dasm_t
     const unsigned char *image;
     size_t image_size;
     byte_attr_t attr[0x1000000]; /* 1MB bytes */
-    VECTOR(dasm_entry_t) entry_points; /* dasm_code_block_t code_blocks */
+    VECTOR(dasm_xref_t) entry_points; /* dasm_code_block_t code_blocks */
     /* however, it is not exactly a block; it is more like an entry point */
     VECTOR(dasm_jump_table_t) jump_tables;
 } x86_dasm_t;
+
+byte_attr_t dasm_get_byte_attr(x86_dasm_t *d, uint32_t offset)
+{
+    return d->attr[offset];
+}
 
 x86_dasm_t * dasm_create(const unsigned char *image, size_t size)
 {
@@ -173,7 +60,7 @@ x86_dasm_t * dasm_create(const unsigned char *image, size_t size)
     /* Initialize all bytes in the image to unknown status. */
     memset(d->attr, 0, d->image_size);
 
-    VECTOR_CREATE(d->entry_points, dasm_entry_t);
+    VECTOR_CREATE(d->entry_points, dasm_xref_t);
     VECTOR_CREATE(d->jump_tables, dasm_jump_table_t);
     return d;
 }
@@ -293,22 +180,21 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
     {
         if (insn->oprs[0].type == OPR_REL) /* near jump to relative address */
         {
-            dasm_entry_t target;
-            target.start.seg = start.seg;
-            target.start.off = start.off + count + insn->oprs[0].val.rel;
-            target.reason = ENTRY_UNCONDITIONAL_JUMP;
-            target.from = start;
-            VECTOR_PUSH(d->entry_points, target);
+            dasm_xref_t xref;
+            xref.source = start;
+            xref.target = increment_farptr(start, count + insn->oprs[0].val.rel);
+            xref.type = XREF_UNCONDITIONAL_JUMP;
+            VECTOR_PUSH(d->entry_points, xref);
             return FLOW_FINISH_BLOCK;
         }
         if (insn->oprs[0].type == OPR_PTR) /* far jump to absolute address */
         {
-            dasm_entry_t target;
-            target.start.seg = insn->oprs[0].val.ptr.seg;
-            target.start.off = (uint16_t)insn->oprs[0].val.ptr.off;
-            target.reason = ENTRY_UNCONDITIONAL_JUMP;
-            target.from = start;
-            VECTOR_PUSH(d->entry_points, target);
+            dasm_xref_t xref;
+            xref.source = start;
+            xref.target.seg = insn->oprs[0].val.ptr.seg;
+            xref.target.off = (uint16_t)insn->oprs[0].val.ptr.off;
+            xref.type = XREF_UNCONDITIONAL_JUMP;
+            VECTOR_PUSH(d->entry_points, xref);
             return FLOW_FINISH_BLOCK;
         }
 
@@ -355,25 +241,28 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
      * Note: We need to know whether the subroutine being called will ever
      * return. For the moment we assume that it will return. 
      */
-    if (op == I_CALL && insn->oprs[0].type == OPR_REL)
+    if (op == I_CALL || op == I_CALLF)
     {
-        dasm_entry_t target;
-        target.start.seg = start.seg;
-        target.start.off = start.off + count + insn->oprs[0].val.rel;
-        target.reason = ENTRY_FUNCTION_CALL;
-        target.from = start;
-        VECTOR_PUSH(d->entry_points, target);
-        return FLOW_CONTINUE;
-    }
-    if (op == I_CALLF && insn->oprs[0].type == OPR_PTR)
-    {
-        dasm_entry_t target;
-        target.start.seg = insn->oprs[0].val.ptr.seg;
-        target.start.off = (uint16_t)insn->oprs[0].val.ptr.off;
-        target.reason = ENTRY_FUNCTION_CALL;
-        target.from = start;
-        VECTOR_PUSH(d->entry_points, target);
-        return FLOW_CONTINUE;
+        if (insn->oprs[0].type == OPR_REL)
+        {
+            dasm_xref_t xref;
+            xref.source = start;
+            xref.target = increment_farptr(start, count + insn->oprs[0].val.rel);
+            xref.type = XREF_FUNCTION_CALL;
+            VECTOR_PUSH(d->entry_points, xref);
+            return FLOW_CONTINUE;
+        }
+        if (insn->oprs[0].type == OPR_PTR)
+        {
+            dasm_xref_t xref;
+            xref.source = start;
+            xref.target.seg = insn->oprs[0].val.ptr.seg;
+            xref.target.off = (uint16_t)insn->oprs[0].val.ptr.off;
+            xref.type = XREF_FUNCTION_CALL;
+            VECTOR_PUSH(d->entry_points, xref);
+            return FLOW_CONTINUE;
+        }
+        return FLOW_DYNAMIC_CALL;
     }
         
     /* If this is a Jcc/JCXZ instruction, push the jump target to the queue, 
@@ -398,17 +287,17 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
     case I_JP:
     case I_JNP:
     case I_JL:
+    case I_JNL:
     case I_JLE:
     case I_JNLE:
     case I_JCXZ:
         if (insn->oprs[0].type == OPR_REL) /* jump to relative position */
         {
-            dasm_entry_t target;
-            target.start.seg = start.seg;
-            target.start.off = start.off + count + insn->oprs[0].val.rel;
-            target.reason = ENTRY_CONDITIONAL_JUMP;
-            target.from = start;
-            VECTOR_PUSH(d->entry_points, target);
+            dasm_xref_t xref;
+            xref.source = start;
+            xref.target = increment_farptr(start, count + insn->oprs[0].val.rel);
+            xref.type = XREF_CONDITIONAL_JUMP;
+            VECTOR_PUSH(d->entry_points, xref);
             return FLOW_CONTINUE;
         }
         /* A valid Jcc instruction must jump to relative address. If not,
@@ -425,24 +314,29 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
 void dasm_stat(x86_dasm_t *d)
 {
     size_t b;
-    size_t total = d->image_size, code = 0, data = 0;
+    size_t total = d->image_size, code = 0, data = 0, insn = 0;
 
     for (b = 0; b < total; b++)
     {
         if ((d->attr[b] & ATTR_TYPE) == TYPE_CODE)
+        {
             ++code;
+            if (d->attr[b] & ATTR_BOUNDARY)
+                ++insn;
+        }
         else if ((d->attr[b] & ATTR_TYPE) == TYPE_DATA)
             ++data;
     }
 
-    fprintf(stderr, "Total: %d bytes\n", total);
-    fprintf(stderr, "Code: %d bytes\n", code);
-    fprintf(stderr, "Data: %d bytes\n", data);
+    fprintf(stderr, "Image size: %d bytes\n", total);
+    fprintf(stderr, "Code size : %d bytes\n", code);
+    fprintf(stderr, "Data size : %d bytes\n", data);
+    fprintf(stderr, "# Instructions: %d\n", insn);
 
     fprintf(stderr, "Jump tables: %d\n", VECTOR_SIZE(d->jump_tables));
 }
 
-static int verbose = 1;
+static int verbose = 0;
 
 /* Analyze the code block starting at location _start_ recursively. 
  * Return one of the following status codes:
@@ -452,7 +346,7 @@ static int verbose = 1;
  * FLOW_FINISH_BLOCK
  *     The block was already analyzed and nothing was done.
  */
-void analyze_code_block(x86_dasm_t *d, dasm_entry_t entry)
+void analyze_code_block(x86_dasm_t *d, dasm_xref_t entry)
 {
     /* Maintain a list of pending code entry points to analyze. At the 
      * beginning, there is only one entry point, which is _start_.
@@ -468,14 +362,14 @@ void analyze_code_block(x86_dasm_t *d, dasm_entry_t entry)
     /* Decode the instruction at p. */
     for ( ; i < VECTOR_SIZE(d->entry_points); i++)
     {
-        dasm_farptr_t pos = VECTOR_AT(d->entry_points, i).start;
-        dasm_farptr_t from = VECTOR_AT(d->entry_points, i).from;
+        dasm_farptr_t pos = VECTOR_AT(d->entry_points, i).target;
+        dasm_farptr_t from = VECTOR_AT(d->entry_points, i).source;
 
         if (verbose)
         {
             printf("%04X:%04X  ; -- %s FROM %04X:%04X --\n", 
                 pos.seg, pos.off, 
-                get_entry_type_string(VECTOR_AT(d->entry_points, i).reason),
+                dasm_xref_type_string(VECTOR_AT(d->entry_points, i).type),
                 from.seg, from.off);
         }
 
@@ -528,9 +422,14 @@ void analyze_code_block(x86_dasm_t *d, dasm_entry_t entry)
             }
             if (ret == FLOW_DYNAMIC_JUMP)
             {
-                fprintf(stderr, "%04X:%04X  %s\n", pos.seg, pos.off, text);
-                fprintf(stderr, "           %s\n",
-                    "JUMP target address cannot be determined by static analysis.");
+                fprintf(stderr, "%04X:%04X  %-32s ; Dynamic analysis required\n",
+                    pos.seg, pos.off, text);
+                break;
+            }
+            if (ret == FLOW_DYNAMIC_CALL)
+            {
+                fprintf(stderr, "%04X:%04X  %-32s ; Dynamic analysis required\n",
+                    pos.seg, pos.off, text);
                 break;
             }
             if (ret == FLOW_FAILED)
@@ -552,17 +451,30 @@ void analyze_code_block(x86_dasm_t *d, dasm_entry_t entry)
     }
 }
 
+static int compare_xrefs_by_target_and_source(const dasm_xref_t *a, const dasm_xref_t *b)
+{
+    int cmp = (int)FARPTR_TO_OFFSET(a->target) - (int)FARPTR_TO_OFFSET(b->target);
+    if (cmp == 0)
+        cmp = (int)FARPTR_TO_OFFSET(a->source) - (int)FARPTR_TO_OFFSET(b->source);
+    return cmp;
+}
+
+static int compare_xrefs_by_target(const dasm_xref_t *a, const dasm_xref_t *b)
+{
+    return (int)FARPTR_TO_OFFSET(a->target) - (int)FARPTR_TO_OFFSET(b->target);
+}
+
 void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
 {
-    dasm_entry_t entry;
+    dasm_xref_t entry;
     size_t i = VECTOR_SIZE(d->jump_tables);
 
     /* Create an entry point using the user-supplied starting offset. */
-    entry.start = start;
-    entry.reason = ENTRY_USER_SPECIFIED;
-    entry.from.seg = -1;
-    entry.from.off = -1;
-
+    entry.target = start;
+    entry.source.seg = -1;
+    entry.source.off = -1;
+    entry.type = XREF_USER_SPECIFIED;
+    
     /* Analyze the code block specified by the user. */
     analyze_code_block(d, entry);
 
@@ -601,10 +513,10 @@ void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
             d->attr[entry_offset+1] |= TYPE_DATA;
             d->attr[entry_offset+1] &= ~ATTR_BOUNDARY;
 
-            entry.start.seg = insn_pos.seg;
-            entry.start.off = target;
-            entry.reason = ENTRY_INDIRECT_JUMP;
-            entry.from = insn_pos;
+            entry.target.seg = insn_pos.seg;
+            entry.target.off = target;
+            entry.source = insn_pos;
+            entry.type = XREF_INDIRECT_JUMP;
 
 #if 0
             fprintf(stderr, "Processing jump entry %d, target %04X:%04X\n",
@@ -618,6 +530,12 @@ void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
             entry_offset += 2;
         }
     }
+
+    /* Sort the XREFs built from the above analyses by target address. 
+     * After this is done, the client can easily list the disassembled
+     * instructions with xrefs sequentially in physical order.
+     */
+    VECTOR_QSORT(d->entry_points, compare_xrefs_by_target_and_source);
 
 #if 0
         /* Output address. */
@@ -642,5 +560,50 @@ void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
         else
             p += count;
 #endif
+}
 
+/* Returns the next xref that refers to the given target address. */
+const dasm_xref_t * 
+dasm_enum_xrefs(
+    x86_dasm_t *d,              /* disassembler object */
+    uint32_t target_offset,     /* absolute address of target byte */
+    const dasm_xref_t *prev)    /* previous xref; NULL for first one */   
+{
+    const dasm_xref_t *first = VECTOR_DATA(d->entry_points);
+    const dasm_xref_t *xref;
+
+    /* If target is -1, return the next xref without filtering target. */
+    if (target_offset == (uint32_t)(-1))
+    {
+        xref = (prev == NULL)? first : prev + 1;
+        return (xref < first + VECTOR_SIZE(d->entry_points))? xref : NULL;
+    }
+
+    /* If prev is NULL, find the first xref that matches the target. */
+    if (prev == NULL) 
+    {
+        dasm_xref_t match;
+        match.target.seg = (uint16_t)(target_offset >> 4);
+        match.target.off = (uint16_t)(target_offset & 0xf);
+        
+        xref = bsearch(&match, first, VECTOR_SIZE(d->entry_points), sizeof(match),
+            compare_xrefs_by_target);
+        if (xref == NULL)
+            return NULL;
+
+        /* If there are multiple matches, bsearch() may return any one of
+         * them. So we need to move the pointer to the first one.
+         */
+        while (xref > first && FARPTR_TO_OFFSET(xref[-1].target) == target_offset)
+            --xref;
+        return xref;
+    }
+
+    /* Return the next xref if it matches target_offset. */
+    xref = prev + 1;
+    if (xref < first + VECTOR_SIZE(d->entry_points) &&
+        FARPTR_TO_OFFSET(xref->target) == target_offset)
+        return xref;
+    else
+        return NULL;
 }

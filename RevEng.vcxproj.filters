@@ -35,5 +35,8 @@
     <ClInclude Include="src\x86_types.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\vector.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
