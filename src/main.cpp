@@ -75,6 +75,7 @@ static void test_dasm(const unsigned char *image, size_t size, size_t offset)
 
     d = dasm_create(image, size);
     dasm_analyze(d, start);
+    dasm_stat(d);
 }
 
 int main(int argc, char* argv[])
@@ -99,7 +100,7 @@ int main(int argc, char* argv[])
 	// std::cout << "Image size: " << reader.image_size() << std::endl;
 
     // Decode from a specific address.
-#if 0
+#if 1
     size_t start = 0x7430; // This is program entry
 #elif 0
     size_t start = 0x0010; // first instruction
@@ -116,6 +117,7 @@ int main(int argc, char* argv[])
 #else
     // Disassemble the executable from a starting address.
     test_dasm(mz_image_address(file), mz_image_size(file), start);
+    //test_dasm(mz_image_address(file), mz_image_size(file), 0x751C);
 #endif
 
 	// Produce a hex-dump of the first few bytes of the image.

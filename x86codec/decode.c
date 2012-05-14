@@ -599,7 +599,7 @@ process_opcode_extension(
 
     if (op == I__EXT1A)
     {
-        static const x86_insn_spec_t map[8] = { OP0(POP) };
+        static const x86_insn_spec_t map[8] = { OP1(POP, Ev) };
         return SPEC_MERGE(map[reg], spec);
     }
 
@@ -969,6 +969,17 @@ static int decode_operand(
          * the operand is byte.
          */
         return decode_memory_operand(opr, rd, OPR_8BIT, R_TYPE_GENERAL, cpu_size, pfx);
+
+    case O_Ep:
+        /* The operand is either a general-purpose register or a memory
+         * address, encoded by ModR/M + SIB + displacement. The size of 
+         * the operand is far pointer.
+         */
+        if (cpu_size == OPR_16BIT)
+            return decode_memory_operand(opr, rd, OPR_32BIT, R_TYPE_GENERAL, cpu_size, pfx);
+        else
+            return 0;
+        break;
 
     case O_Ev:
         /* The operand is either a general-purpose register or a memory

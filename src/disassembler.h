@@ -21,6 +21,7 @@ typedef struct x86_dasm_t x86_dasm_t;
 x86_dasm_t* dasm_create(const unsigned char *image, size_t size);
 void dasm_destroy(x86_dasm_t *d);
 void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start);
+void dasm_stat(x86_dasm_t *d);
 
 #ifdef __cplusplus
 }
