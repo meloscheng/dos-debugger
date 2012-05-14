@@ -6,13 +6,6 @@
 #include <stdlib.h>
 #include <memory.h>
 
-/* Relocation entry in a DOS MZ executable. */
-typedef struct mz_reloc_t
-{
-	uint16_t off;
-	uint16_t seg;
-} mz_reloc_t;
-
 struct mz_file_t
 {
     mz_header_t header; /* header in the .EXE file */
@@ -31,8 +24,10 @@ mz_file_t *mz_open(const char *filename)
 {
     mz_file_t *file;
     size_t used_size;
+#if 0
     int i;
     const unsigned char *image;
+#endif
 
 #define REQUIRE(cond) \
     do { \
@@ -76,16 +71,18 @@ mz_file_t *mz_open(const char *filename)
     /* Load relocation table. */
     REQUIRE((size_t)file->header.reloc_off + 
         (size_t)file->header.reloc_count * 4 <= file->start);
+#if 0
     image = file->pmem + file->start;
     for (i = 0; i < file->header.reloc_count; i++)
     {
-        mz_reloc_t ent;
+        mz_farptr_t ent;
         size_t off;
         memcpy(&ent, file->pmem + file->header.reloc_off + i * 4, 4);
         off = (size_t)ent.off + (size_t)ent.seg * 16;
 
         /* printf("[%04X:%04X] %04X\n", ent.seg, ent.off, read_word(image + off)); */
     }
+#endif
 
     /* Return loaded file. */
     return file;
@@ -124,9 +121,17 @@ size_t mz_reloc_count(const mz_file_t *file)
  * of the executable image. The module loader should add the loaded segment
  * to the word at this location.
  */
-size_t mz_reloc_entry(const mz_file_t *file, size_t i)
+mz_farptr_t mz_reloc_entry(const mz_file_t *file, size_t i)
 {
-    mz_reloc_t ent;
+    mz_farptr_t ent;
     memcpy(&ent, file->pmem + file->header.reloc_off + i * 4, 4);
-    return (size_t)ent.off + (size_t)ent.seg * 16;
+    return ent;
+}
+
+mz_farptr_t mz_program_entry(const mz_file_t *file)
+{
+    mz_farptr_t ent;
+    ent.seg = file->header.reg_cs;
+    ent.off = file->header.reg_ip;
+    return ent;
 }

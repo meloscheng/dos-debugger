@@ -6,7 +6,7 @@
 
 #define MAX2(a,b) ((a) > (b) ? (a) : (b))
 
-#define FARPTR_TO_OFFSET(p) (((uint32_t)(p).seg << 4) | (uint32_t)(p).off)
+#define FARPTR_TO_OFFSET(p) (((uint32_t)(p).seg << 4) + (uint32_t)(p).off)
 
 #define VECTOR_STRUCT(Ty)   \
     struct {                \
@@ -376,8 +376,8 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
         return FLOW_CONTINUE;
     }
         
-    /* If this is a Jcc instruction, push the jump target to the queue, and
-     * follow the flow assuming no jump.
+    /* If this is a Jcc/JCXZ instruction, push the jump target to the queue, 
+     * and follow the flow assuming no jump.
      *
      * Note: We assume that "no jump" is a reachable branch. If the code is
      * ill-formed such that the "no jump" branch will never be executed, the
@@ -400,6 +400,7 @@ int analyze_flow_instruction(x86_dasm_t *d, dasm_farptr_t start, size_t count, x
     case I_JL:
     case I_JLE:
     case I_JNLE:
+    case I_JCXZ:
         if (insn->oprs[0].type == OPR_REL) /* jump to relative position */
         {
             dasm_entry_t target;
@@ -565,10 +566,10 @@ void dasm_analyze(x86_dasm_t *d, dasm_farptr_t start)
     /* Analyze the code block specified by the user. */
     analyze_code_block(d, entry);
 
+#if 0
     fprintf(stderr, "\n-- Statistics after initial analysis --\n");
     dasm_stat(d);
-    //fprintf(stderr, "Initial analysis leaves us with %d jump tables.\n",
-    //    VECTOR_SIZE(d->jump_tables) - i);
+#endif
 
     /* Analyze any jump tables encountered in the above analysis. Since we
      * may encounter more jump tables on the way, we do this recursively

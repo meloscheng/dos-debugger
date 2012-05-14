@@ -3,18 +3,14 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "x86_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef uint16_t x86_nearptr16_t;
-
-typedef struct x86_farptr16_t
-{
-    uint16_t off;   /* offset within segment */
-    uint16_t seg;   /* segment */
-} x86_farptr16_t, dasm_farptr_t;
+/* typedef uint16_t x86_nearptr16_t; */
+typedef x86_farptr16_t dasm_farptr_t;
 
 typedef struct x86_dasm_t x86_dasm_t;
 

@@ -4,10 +4,14 @@
 #define MZ_H
 
 #include <stdint.h>
+#include "x86_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Represents a 16-bit far pointer. */
+typedef x86_farptr16_t mz_farptr_t;
 
 /* File header in a DOS MZ executable. */
 typedef struct mz_header_t
@@ -49,11 +53,17 @@ size_t mz_image_size(const mz_file_t *file);
 /* Gets the number of relocation entries. */
 size_t mz_reloc_count(const mz_file_t *file);
 
-/* Gets the offset a relocation entry. The offset is relative to the start
- * of the executable image. The module loader should add the loaded segment
+/* Gets the content of a relocation entry. Returns a far pointer, relative to
+ * the start of the executable image, that points to a 16-bit word which
+ * contains a segment address. The module loader should add the loaded segment
  * to the word at this location.
  */
-size_t mz_reloc_entry(const mz_file_t *file, size_t i);
+mz_farptr_t mz_reloc_entry(const mz_file_t *file, size_t i);
+
+/* Returns the address of the first instruction to execute. The address is
+ * relative to the start of the executable image.
+ */
+mz_farptr_t mz_program_entry(const mz_file_t *file);
 
 #ifdef __cplusplus
 }

@@ -95,6 +95,7 @@
   <ItemGroup>
     <ClInclude Include="src\disassembler.h" />
     <ClInclude Include="src\mz.h" />
+    <ClInclude Include="src\x86_types.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -66,15 +66,14 @@ static void test_decode(const unsigned char *image, size_t size, size_t start)
     }
 }
 
-static void test_dasm(const unsigned char *image, size_t size, size_t offset)
+static void test_dasm(const unsigned char *image, size_t size, mz_farptr_t start)
 {
     x86_dasm_t *d;
-    dasm_farptr_t start;
-    start.seg = 0;
-    start.off = offset;
 
     d = dasm_create(image, size);
     dasm_analyze(d, start);
+
+    fprintf(stderr, "\n-- Statistics --\n");
     dasm_stat(d);
 }
 
@@ -101,7 +100,9 @@ int main(int argc, char* argv[])
 
     // Decode from a specific address.
 #if 1
-    size_t start = 0x7430; // This is program entry
+    //size_t start = 0x7430; // This is program entry
+    mz_farptr_t start = mz_program_entry(file);
+    // start.seg = 0;
 #elif 0
     size_t start = 0x0010; // first instruction
 #elif 0
