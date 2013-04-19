@@ -95,13 +95,19 @@ static void test_dasm(const unsigned char *image, size_t size, mz_farptr_t start
                 const dasm_xref_t *xref = dasm_enum_xrefs(d, i, NULL);
                 if (xref)
                 {
+                    dasm_xref_type type = xref->type;
                     char comment[256];
                     sprintf(comment, "loc_%X:", i);
-                    printf("\n%-10s ; XRef:", comment);
+                    printf("\n%-10s ; %s:", comment, dasm_xref_type_string(type));
                     while (xref)
                     {
                         printf(" %04X:%04X", xref->source.seg, xref->source.off);
                         xref = dasm_enum_xrefs(d, i, xref);
+                        if (xref && xref->type != type)
+                        {
+                            type = xref->type;
+                            printf("\n%-10s ; %s:", "", dasm_xref_type_string(type));
+                        }
                     }
                     printf("\n");
                 }

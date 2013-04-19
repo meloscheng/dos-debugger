@@ -86,9 +86,9 @@ typedef enum dasm_xref_type
  */
 typedef struct dasm_xref_t
 {
-    dasm_farptr_t target;   /* target address being referenced */
-    dasm_farptr_t source;   /* source address that refers to target */
-    dasm_xref_type type;    /* why does source refer to target */
+    dasm_farptr_t target;   /* Target address being referenced. */
+    dasm_farptr_t source;   /* Source address that refers to target. */
+    dasm_xref_type type;    /* XRef type (e.g. function call, jump, etc). */
 } dasm_xref_t;
 
 /* Returns a user-friendly string that represents a xref type. */
